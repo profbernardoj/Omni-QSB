@@ -4486,11 +4486,13 @@ void CWallet::StopQSBPool()
 
 void CWallet::GetQSBPoolStatus(int& ready_count, int& target_count, bool& is_running) const
 {
-    if (m_qsbWallet) {
-        static_cast<QSBWallet*>(m_qsbWallet)->GetPoolStatus(ready_count, target_count, is_running);
-    } else {
+    // Null check: bitcoin-wallet standalone tool never calls StartQSBPool(),
+    // so m_qsbWallet stays nullptr. Return safe defaults.
+    if (!m_qsbWallet) {
         ready_count = 0;
         target_count = 0;
         is_running = false;
+        return;
     }
+    static_cast<QSBWallet*>(m_qsbWallet)->GetPoolStatus(ready_count, target_count, is_running);
 }

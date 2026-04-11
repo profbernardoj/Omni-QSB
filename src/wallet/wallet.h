@@ -721,7 +721,10 @@ private:
     // ScriptPubKeyMan::GetID. In many cases it will be the hash of an internal structure
     std::map<uint256, std::unique_ptr<ScriptPubKeyMan>> m_spk_managers;
 
-    //! Quantum-Safe Bitcoin wallet integration (opaque, defined in wallet.cpp)
+    //! Quantum-Safe Bitcoin wallet integration (opaque pointer)
+    //! This is void* to avoid requiring QSBWallet symbols in standalone
+    //! tools like bitcoin-wallet that only link libbitcoin_wallet_a,
+    //! not libbitcoin_server_a where QSBWallet is defined.
     void* m_qsbWallet{nullptr};
 
 public:
