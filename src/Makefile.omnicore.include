@@ -42,7 +42,8 @@ OMNICORE_H = \
   omnicore/walletcache.h \
   omnicore/walletfetchtxs.h \
   omnicore/wallettxbuilder.h \
-  omnicore/walletutils.h
+  omnicore/walletutils.h \
+  omnicore/qsb/qsb_local_verifier.h
 
 OMNICORE_CPP = \
   omnicore/activation.cpp \
@@ -88,7 +89,8 @@ OMNICORE_CPP = \
   omnicore/walletcache.cpp \
   omnicore/walletfetchtxs.cpp \
   omnicore/wallettxbuilder.cpp \
-  omnicore/walletutils.cpp
+  omnicore/walletutils.cpp \
+  omnicore/qsb/qsb_local_verifier.cpp
 
 if ENABLE_WALLET
 OMNICORE_CPP += omnicore/rpctx.cpp

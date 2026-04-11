@@ -291,7 +291,7 @@ bool SolverQSB(const CScript& scriptPubKey, std::vector<std::vector<unsigned cha
     size_t pinEnd = 0;
 
     // Search within the first 200 bytes (pinning section is near the start)
-    size_t searchLimit = std::min(scriptPubKey.size(), (size_t)200);
+    size_t searchLimit = std::min<size_t>(scriptPubKey.size(), 200);
     for (size_t i = 0; i + PIN_PATTERN_LEN <= searchLimit; ++i) {
         if (memcmp(&scriptPubKey[i], PIN_PATTERN, PIN_PATTERN_LEN) == 0) {
             foundPinning = true;

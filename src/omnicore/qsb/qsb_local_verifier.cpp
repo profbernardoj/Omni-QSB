@@ -195,6 +195,10 @@ bool VerifyPinningResult(
     //    bytes), we check that the first bytes form a valid DER prefix:
     //      0x30 [len] 0x02 [R-len] [R bytes...]
     //
+    //    NOTE: This is a PREFIX CHECK ONLY — we validate the DER structure fits
+    //    within 20 bytes, not that it's a complete signature. Full signature
+    //    validation happens during transaction assembly (sighash verification).
+    //
     //    This is the "DER-valid RIPEMD160" target from the spec.
     if (result.ripemd160_hash.size() < 4) {
         error.code = "DER_TOO_SHORT";

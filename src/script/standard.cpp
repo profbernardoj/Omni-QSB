@@ -113,7 +113,7 @@ static bool MatchQSBBare(const CScript& scriptPubKey, std::vector<std::vector<un
     static const unsigned char PIN_PATTERN[] = { 0x78, 0xad, 0xa6, 0x7c, 0xad };
     bool found = false;
     size_t pinEnd = 0;
-    size_t limit = std::min(scriptPubKey.size(), (size_t)200);
+    size_t limit = std::min<size_t>(scriptPubKey.size(), 200);
     for (size_t i = 0; i + 5 <= limit; ++i) {
         if (memcmp(&scriptPubKey[i], PIN_PATTERN, 5) == 0) {
             found = true;
