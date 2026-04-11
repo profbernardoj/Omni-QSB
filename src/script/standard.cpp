@@ -99,6 +99,9 @@ static bool MatchMultisig(const CScript& script, unsigned int& required, std::ve
  *
  * If matched, vSolutionsRet receives a single 20-byte element: the Hash160 of
  * the concatenated HORS commitments extracted from the script.
+ *
+ * NOTE: The 5-byte PIN_PATTERN fingerprint is intentionally minimal for the
+ * initial prototype. Will be tightened once Avihu confirms the final template.
  */
 static bool MatchQSBBare(const CScript& scriptPubKey, std::vector<std::vector<unsigned char>>& vSolutionsRet)
 {

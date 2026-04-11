@@ -258,7 +258,11 @@ bool SafeSolver(const CScript& scriptPubKey, txnouttype& typeRet, std::vector<st
  * 3. HORS commitments: 20-byte hash pushes following the dummy signatures section
  *
  * The template is designed to match Avihu Levy's Config A QSB script structure.
- * It will be tightened once the final template is confirmed end-to-end.
+ *
+ * NOTE: The current 5-byte PIN_PATTERN fingerprint is intentionally minimal for
+ * the initial regtest prototype. It will be tightened to match the full Config A
+ * opcode sequence (including round structure validation) once Avihu confirms the
+ * final end-to-end digest/assembly template.
  */
 bool SolverQSB(const CScript& scriptPubKey, std::vector<std::vector<unsigned char>>& commitmentsRet)
 {

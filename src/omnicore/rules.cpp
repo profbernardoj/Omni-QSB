@@ -241,8 +241,9 @@ CMainConsensusParams::CMainConsensusParams()
     SCRIPTHASH_BLOCK = 322000;
     MULTISIG_BLOCK = 0;
     NULLDATA_BLOCK = 395000;
-    //! Block to enable QSB bare script support
-    QSB_BLOCK = std::numeric_limits<int>::max(); // TBD: set after successful testnet activation
+    // QSB bare script support (Quantum-Safe Bitcoin)
+    // TODO: set real activation height ~6 months after successful testnet validation
+    QSB_BLOCK = std::numeric_limits<int>::max();
     // Transaction restrictions:
     MSC_ALERT_BLOCK = 0;
     MSC_SEND_BLOCK = 249498;
