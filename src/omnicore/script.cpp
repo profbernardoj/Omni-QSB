@@ -1,6 +1,7 @@
 #include <omnicore/script.h>
 
 #include <amount.h>
+#include <hash.h>
 #include <policy/feerate.h>
 #include <policy/policy.h>
 #include <script/script.h>
@@ -227,7 +228,125 @@ bool SafeSolver(const CScript& scriptPubKey, txnouttype& typeRet, std::vector<st
         }
     }
 
+    // QSB bare script detection: check for the distinctive pinning pattern
+    // QSB scripts are large (>5000 bytes) and contain OP_RIPEMD160 + OP_CHECKSIGVERIFY puzzle
+    if (scriptPubKey.size() >= 5000 && scriptPubKey.size() <= 10000) {
+        std::vector<std::vector<unsigned char>> qsbCommitments;
+        if (SolverQSB(scriptPubKey, qsbCommitments)) {
+            typeRet = TX_QSB_BARE;
+            // Return the Hash160 of serialized commitments as the "solution"
+            std::vector<unsigned char> serialized = SerializeHORSCommitments(qsbCommitments);
+            uint160 qsbId;
+            CHash160().Write(serialized.data(), serialized.size()).Finalize(qsbId.begin());
+            vSolutionsRet.push_back(std::vector<unsigned char>(qsbId.begin(), qsbId.end()));
+            return true;
+        }
+    }
+
     vSolutionsRet.clear();
     typeRet = TX_NONSTANDARD;
     return false;
+}
+
+/**
+ * Checks if a script matches the QSB bare script template.
+ *
+ * Detection strategy:
+ * 1. Size check: QSB scripts are 5,000-10,000 bytes (Config A baseline ~9,650)
+ * 2. Structural markers: the pinning section uses a distinctive opcode sequence:
+ *    <sig_nonce> OP_OVER OP_CHECKSIGVERIFY OP_RIPEMD160 OP_SWAP OP_CHECKSIGVERIFY
+ * 3. HORS commitments: 20-byte hash pushes following the dummy signatures section
+ *
+ * The template is designed to match Avihu Levy's Config A QSB script structure.
+ * It will be tightened once the final template is confirmed end-to-end.
+ */
+bool SolverQSB(const CScript& scriptPubKey, std::vector<std::vector<unsigned char>>& commitmentsRet)
+{
+    commitmentsRet.clear();
+
+    // Size gate: QSB scripts are large bare scripts
+    if (scriptPubKey.size() < 5000 || scriptPubKey.size() > 10000) {
+        return false;
+    }
+
+    // Scan for the pinning section's distinctive opcode sequence:
+    // OP_OVER(0x78) OP_CHECKSIGVERIFY(0xad) OP_RIPEMD160(0xa6) OP_SWAP(0x7c) OP_CHECKSIGVERIFY(0xad)
+    //
+    // This 5-byte sequence is the fingerprint of QSB's hash-to-signature puzzle.
+    // It appears near the beginning of the script (after the sig_nonce push).
+    static const unsigned char PIN_PATTERN[] = {
+        0x78, // OP_OVER
+        0xad, // OP_CHECKSIGVERIFY
+        0xa6, // OP_RIPEMD160
+        0x7c, // OP_SWAP
+        0xad  // OP_CHECKSIGVERIFY
+    };
+    const size_t PIN_PATTERN_LEN = sizeof(PIN_PATTERN);
+
+    bool foundPinning = false;
+    size_t pinEnd = 0;
+
+    // Search within the first 200 bytes (pinning section is near the start)
+    size_t searchLimit = std::min(scriptPubKey.size(), (size_t)200);
+    for (size_t i = 0; i + PIN_PATTERN_LEN <= searchLimit; ++i) {
+        if (memcmp(&scriptPubKey[i], PIN_PATTERN, PIN_PATTERN_LEN) == 0) {
+            foundPinning = true;
+            pinEnd = i + PIN_PATTERN_LEN;
+            break;
+        }
+    }
+
+    if (!foundPinning) {
+        return false;
+    }
+
+    // After the pinning section, the script contains two digest rounds.
+    // Each round starts with n HORS commitments (20-byte hash pushes)
+    // followed by n dummy signatures (9-byte pushes).
+    //
+    // We extract the HORS commitments: sequences of exactly 20-byte pushes.
+    // The pattern is: <push 20 bytes> repeated n times per round, 2 rounds.
+    //
+    // Walk the script from after the pinning section and collect 20-byte pushes.
+    CScript::const_iterator pc = scriptPubKey.begin() + pinEnd;
+    int commitmentCount = 0;
+    const int MIN_COMMITMENTS = 20;  // minimum to recognize as QSB
+    const int MAX_COMMITMENTS = 400; // 2 rounds × 150 max + margin
+
+    while (pc < scriptPubKey.end() && commitmentCount < MAX_COMMITMENTS) {
+        opcodetype opcode;
+        std::vector<unsigned char> data;
+        if (!scriptPubKey.GetOp(pc, opcode, data)) {
+            break;
+        }
+
+        // HORS commitments are exactly 20 bytes pushed with a direct push opcode
+        if (data.size() == 20 && opcode == 0x14) { // 0x14 = push exactly 20 bytes
+            commitmentsRet.push_back(data);
+            ++commitmentCount;
+        }
+    }
+
+    // Require a minimum number of commitments to confirm QSB structure
+    if (commitmentCount < MIN_COMMITMENTS) {
+        commitmentsRet.clear();
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Serializes HORS commitments into a contiguous byte vector for Hash160.
+ *
+ * The commitments are concatenated in order. This produces a deterministic
+ * identifier for the QSB address: Hash160(serialize) = QSB address payload.
+ */
+std::vector<unsigned char> SerializeHORSCommitments(const std::vector<std::vector<unsigned char>>& commitments)
+{
+    std::vector<unsigned char> result;
+    for (const auto& c : commitments) {
+        result.insert(result.end(), c.begin(), c.end());
+    }
+    return result;
 }

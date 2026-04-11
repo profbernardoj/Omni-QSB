@@ -61,6 +61,7 @@ enum txnouttype
     TX_SCRIPTHASH,
     TX_MULTISIG,
     TX_NULL_DATA, //!< unspendable OP_RETURN script that carries data
+    TX_QSB_BARE, //!< Quantum-Safe Bitcoin bare script (HORS + RIPEMD-160 puzzle)
     TX_WITNESS_V0_SCRIPTHASH,
     TX_WITNESS_V0_KEYHASH,
     TX_WITNESS_UNKNOWN, //!< Only for Witness versions not already defined above
@@ -108,6 +109,14 @@ struct WitnessV0KeyHash : public uint160
     using uint160::uint160;
 };
 
+/** QSB address: Hash160 of serialized HORS commitments from a QSB bare script. */
+struct QSBHash : public uint160
+{
+    QSBHash() : uint160() {}
+    explicit QSBHash(const uint160& hash) : uint160(hash) {}
+    using uint160::uint160;
+};
+
 //! CTxDestination subtype to encode any future Witness version
 struct WitnessUnknown
 {
@@ -140,7 +149,7 @@ struct WitnessUnknown
  *  * WitnessUnknown: TX_WITNESS_UNKNOWN destination (P2W???)
  *  A CTxDestination is the internal data type encoded in a bitcoin address
  */
-typedef boost::variant<CNoDestination, PKHash, ScriptHash, WitnessV0ScriptHash, WitnessV0KeyHash, WitnessUnknown> CTxDestination;
+typedef boost::variant<CNoDestination, PKHash, ScriptHash, WitnessV0ScriptHash, WitnessV0KeyHash, WitnessUnknown, QSBHash> CTxDestination;
 
 /** Check whether a CTxDestination is a CNoDestination. */
 bool IsValidDestination(const CTxDestination& dest);
@@ -212,6 +221,7 @@ struct DataVisitor : public boost::static_visitor<std::vector<unsigned char>>
     std::vector<unsigned char> operator()(const WitnessV0ScriptHash& witnessScriptHash) const;
     std::vector<unsigned char> operator()(const WitnessV0KeyHash& witnessKeyHash) const;
     std::vector<unsigned char> operator()(const WitnessUnknown& witnessUnknown) const;
+    std::vector<unsigned char> operator()(const QSBHash& qsbHash) const;
 };
 
 #endif // BITCOIN_SCRIPT_STANDARD_H

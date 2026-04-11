@@ -241,6 +241,8 @@ CMainConsensusParams::CMainConsensusParams()
     SCRIPTHASH_BLOCK = 322000;
     MULTISIG_BLOCK = 0;
     NULLDATA_BLOCK = 395000;
+    //! Block to enable QSB bare script support
+    QSB_BLOCK = 999999; // TBD after testnet activation
     // Transaction restrictions:
     MSC_ALERT_BLOCK = 0;
     MSC_SEND_BLOCK = 249498;
@@ -286,6 +288,7 @@ CTestNetConsensusParams::CTestNetConsensusParams()
     SCRIPTHASH_BLOCK = 0;
     MULTISIG_BLOCK = 0;
     NULLDATA_BLOCK = 0;
+    QSB_BLOCK = 0; // QSB enabled immediately on testnet
     // Transaction restrictions:
     MSC_ALERT_BLOCK = 0;
     MSC_SEND_BLOCK = 0;
@@ -331,6 +334,7 @@ CRegTestConsensusParams::CRegTestConsensusParams()
     SCRIPTHASH_BLOCK = 0;
     MULTISIG_BLOCK = 0;
     NULLDATA_BLOCK = 0;
+    QSB_BLOCK = 0; // QSB enabled immediately on regtest
     // Transaction restrictions:
     MSC_ALERT_BLOCK = 0;
     MSC_SEND_BLOCK = 0;
@@ -424,6 +428,9 @@ bool IsAllowedInputType(int whichType, int nBlock)
 
         case TX_SCRIPTHASH:
             return (params.SCRIPTHASH_BLOCK <= nBlock);
+
+        case TX_QSB_BARE:
+            return (params.QSB_BLOCK <= nBlock);
     }
 
     return false;
@@ -449,6 +456,9 @@ bool IsAllowedOutputType(int whichType, int nBlock)
 
         case TX_NULL_DATA:
             return (params.NULLDATA_BLOCK <= nBlock);
+
+        case TX_QSB_BARE:
+            return (params.QSB_BLOCK <= nBlock);
     }
 
     return false;

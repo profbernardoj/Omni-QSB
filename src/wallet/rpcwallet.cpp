@@ -3695,6 +3695,13 @@ public:
     }
 
     UniValue operator()(const WitnessUnknown& id) const { return UniValue(UniValue::VOBJ); }
+
+    UniValue operator()(const QSBHash& id) const
+    {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("isqsb", true);
+        return obj;
+    }
 };
 
 static UniValue DescribeWalletAddress(const CWallet* const pwallet, const CTxDestination& dest)

@@ -66,6 +66,17 @@ public:
         return bech32::Encode(m_params.Bech32HRP(), data);
     }
 
+    std::string operator()(const QSBHash& id) const
+    {
+        // QSB addresses use Bech32m encoding with "qs" HRP
+        // Version byte = 0, payload = 20 bytes (Hash160 of HORS commitments)
+        std::vector<unsigned char> data = {0};
+        data.reserve(33);
+        ConvertBits<8, 5, true>([&](unsigned char c) { data.push_back(c); }, id.begin(), id.end());
+        // Use "qs" for mainnet, "qs" for testnet too (differentiated by the network context)
+        return bech32::Encode("qs", data);
+    }
+
     std::string operator()(const CNoDestination& no) const { return {}; }
 };
 
@@ -125,6 +136,24 @@ CTxDestination DecodeDestination(const std::string& str, const CChainParams& par
             return unk;
         }
     }
+
+    // QSB Bech32 address: "qs1..." (Bech32 with HRP "qs")
+    data.clear();
+    auto qsbBech = bech32::Decode(str);
+    if (qsbBech.second.size() > 0 && qsbBech.first == "qs") {
+        int version = qsbBech.second[0];
+        if (version == 0) {
+            data.reserve(((qsbBech.second.size() - 1) * 5) / 8);
+            if (ConvertBits<5, 8, false>([&](unsigned char c) { data.push_back(c); }, qsbBech.second.begin() + 1, qsbBech.second.end())) {
+                if (data.size() == 20) {
+                    uint160 qsbHash;
+                    std::copy(data.begin(), data.end(), qsbHash.begin());
+                    return QSBHash(qsbHash);
+                }
+            }
+        }
+    }
+
     return CNoDestination();
 }
 } // namespace

@@ -6,6 +6,7 @@
 #include <script/standard.h>
 
 #include <crypto/sha256.h>
+#include <hash.h>
 #include <pubkey.h>
 #include <script/script.h>
 
@@ -35,6 +36,7 @@ const char* GetTxnOutputType(txnouttype t)
     case TX_SCRIPTHASH: return "scripthash";
     case TX_MULTISIG: return "multisig";
     case TX_NULL_DATA: return "nulldata";
+    case TX_QSB_BARE: return "qsb_bare";
     case TX_WITNESS_V0_KEYHASH: return "witness_v0_keyhash";
     case TX_WITNESS_V0_SCRIPTHASH: return "witness_v0_scripthash";
     case TX_WITNESS_UNKNOWN: return "witness_unknown";
@@ -86,6 +88,65 @@ static bool MatchMultisig(const CScript& script, unsigned int& required, std::ve
     unsigned int keys = CScript::DecodeOP_N(opcode);
     if (pubkeys.size() != keys || keys < required) return false;
     return (it + 1 == script.end());
+}
+
+/**
+ * Match a QSB (Quantum-Safe Bitcoin) bare script.
+ *
+ * QSB scripts are large (5,000-10,000 bytes) and contain a distinctive pinning
+ * section with the opcode sequence:
+ *   OP_OVER(0x78) OP_CHECKSIGVERIFY(0xad) OP_RIPEMD160(0xa6) OP_SWAP(0x7c) OP_CHECKSIGVERIFY(0xad)
+ *
+ * If matched, vSolutionsRet receives a single 20-byte element: the Hash160 of
+ * the concatenated HORS commitments extracted from the script.
+ */
+static bool MatchQSBBare(const CScript& scriptPubKey, std::vector<std::vector<unsigned char>>& vSolutionsRet)
+{
+    if (scriptPubKey.size() < 5000 || scriptPubKey.size() > 10000) {
+        return false;
+    }
+
+    // Scan for pinning section fingerprint within first 200 bytes
+    static const unsigned char PIN_PATTERN[] = { 0x78, 0xad, 0xa6, 0x7c, 0xad };
+    bool found = false;
+    size_t pinEnd = 0;
+    size_t limit = std::min(scriptPubKey.size(), (size_t)200);
+    for (size_t i = 0; i + 5 <= limit; ++i) {
+        if (memcmp(&scriptPubKey[i], PIN_PATTERN, 5) == 0) {
+            found = true;
+            pinEnd = i + 5;
+            break;
+        }
+    }
+    if (!found) return false;
+
+    // Extract 20-byte HORS commitment pushes after the pinning section.
+    // Each commitment is pushed with opcode 0x14 (push exactly 20 bytes).
+    std::vector<std::vector<unsigned char>> commitments;
+    CScript::const_iterator pc = scriptPubKey.begin() + pinEnd;
+
+    while (pc < scriptPubKey.end() && commitments.size() < 400) {
+        opcodetype opcode;
+        std::vector<unsigned char> data;
+        if (!scriptPubKey.GetOp(pc, opcode, data)) break;
+        if (data.size() == 20 && opcode == 0x14) {
+            commitments.push_back(data);
+        }
+    }
+
+    // Need at least 20 commitments to confirm QSB structure
+    if (commitments.size() < 20) return false;
+
+    // Compute Hash160 of serialized commitments as the QSB address ID
+    std::vector<unsigned char> serialized;
+    serialized.reserve(commitments.size() * 20);
+    for (const auto& c : commitments) {
+        serialized.insert(serialized.end(), c.begin(), c.end());
+    }
+    uint160 qsbId = Hash160(serialized.data(), serialized.data() + serialized.size());
+    vSolutionsRet.clear();
+    vSolutionsRet.push_back(std::vector<unsigned char>(qsbId.begin(), qsbId.end()));
+    return true;
 }
 
 txnouttype Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned char>>& vSolutionsRet)
@@ -149,6 +210,13 @@ txnouttype Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned 
         return TX_MULTISIG;
     }
 
+    // QSB bare script detection: large scripts (5-10KB) with the distinctive
+    // pinning section opcode pattern. QSB is a bare output (not P2SH) because
+    // the script exceeds the 520-byte P2SH push limit.
+    if (MatchQSBBare(scriptPubKey, vSolutionsRet)) {
+        return TX_QSB_BARE;
+    }
+
     vSolutionsRet.clear();
     return TX_NONSTANDARD;
 }
@@ -191,6 +259,11 @@ bool ExtractDestination(const CScript& scriptPubKey, CTxDestination& addressRet)
         std::copy(vSolutions[1].begin(), vSolutions[1].end(), unk.program);
         unk.length = vSolutions[1].size();
         addressRet = unk;
+        return true;
+    } else if (whichType == TX_QSB_BARE) {
+        // QSB address: Hash160 of serialized HORS commitments
+        // vSolutions[0] already contains the 20-byte QSB ID (computed by SafeSolver)
+        addressRet = QSBHash(uint160(vSolutions[0]));
         return true;
     }
     // Multisig txns have more than one address...
@@ -283,6 +356,15 @@ public:
         *script << CScript::EncodeOP_N(id.version) << std::vector<unsigned char>(id.program, id.program + id.length);
         return true;
     }
+
+    // QSB bare scripts are too large to reconstruct from the hash alone.
+    // GetScriptForDestination returns false for QSBHash — callers must use
+    // the original on-chain bare script directly.
+    bool operator()(const QSBHash& id) const
+    {
+        script->clear();
+        return false;
+    }
 };
 } // namespace
 
@@ -333,3 +415,4 @@ valtype DataVisitor::operator()(const CScriptID& scriptID) const { return valtyp
 valtype DataVisitor::operator()(const WitnessV0ScriptHash& witnessScriptHash) const { return valtype(witnessScriptHash.begin(), witnessScriptHash.end()); }
 valtype DataVisitor::operator()(const WitnessV0KeyHash& witnessKeyHash) const { return valtype(witnessKeyHash.begin(), witnessKeyHash.end()); }
 valtype DataVisitor::operator()(const WitnessUnknown&) const { return valtype(); }
+valtype DataVisitor::operator()(const QSBHash& qsbHash) const { return valtype(qsbHash.begin(), qsbHash.end()); }

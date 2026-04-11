@@ -113,6 +113,8 @@ public:
     int MULTISIG_BLOCK;
     //! Block to enable OP_RETURN based encoding
     int NULLDATA_BLOCK;
+    //! Block to enable Quantum-Safe Bitcoin (QSB) bare script support
+    int QSB_BLOCK;
 
     //! Block to enable alerts and notifications
     int MSC_ALERT_BLOCK;
