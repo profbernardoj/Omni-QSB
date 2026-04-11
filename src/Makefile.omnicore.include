@@ -44,7 +44,8 @@ OMNICORE_H = \
   omnicore/wallettxbuilder.h \
   omnicore/walletutils.h \
   omnicore/qsb/qsb_local_verifier.h \
-  omnicore/qsb/qsb_job_builder.h
+  omnicore/qsb/qsb_job_builder.h \
+  omnicore/qsb/qsb_morpheus_client.h
 
 OMNICORE_CPP = \
   omnicore/activation.cpp \
@@ -92,7 +93,8 @@ OMNICORE_CPP = \
   omnicore/wallettxbuilder.cpp \
   omnicore/walletutils.cpp \
   omnicore/qsb/qsb_local_verifier.cpp \
-  omnicore/qsb/qsb_job_builder.cpp
+  omnicore/qsb/qsb_job_builder.cpp \
+  omnicore/qsb/qsb_morpheus_client.cpp
 
 if ENABLE_WALLET
 OMNICORE_CPP += omnicore/rpctx.cpp
