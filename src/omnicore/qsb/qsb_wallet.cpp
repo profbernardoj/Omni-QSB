@@ -9,6 +9,8 @@
 
 #include <bech32.h>
 #include <chainparams.h>
+#include <hash.h>
+#include <uint256.h>
 
 #include <memory>
 
@@ -203,4 +205,80 @@ bool QSBWallet::VerifyResult(const QSBJob& job, const MorpheusJobResult& result,
     }
 
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// QSB Output Assembly (Stub)
+// ---------------------------------------------------------------------------
+
+bool QSBWallet::AssembleQSBOutput(const QSBPoolEntry& entry, CScript& script)
+{
+    // ================================================
+    // NOTE: FINAL ASSEMBLY STUB — AWAITING AVIHU LEVY
+    // ================================================
+    // The real implementation will call:
+    //   QSBReferenceLib::AssembleBareScript(keys, results, sequence, locktime);
+    //
+    // This function will produce the final ~9,650-byte bare scriptPubKey
+    // containing:
+    //   - PIN_PATTERN (OP_OVER OP_CHECKSIGVERIFY OP_RIPEMD160 OP_SWAP OP_CHECKSIGVERIFY)
+    //   - 150 HORS commitments (20 bytes each)
+    //   - Dummy signatures (~150 DER-encoded)
+    //   - nSequence/nLockTime encoding for RIPEMD160 puzzle
+    //
+    // Until Avihu confirms the exact Config A template and provides
+    // the reference library, we return a minimal placeholder script
+    // that is syntactically valid but will NOT pass real QSB verification.
+    //
+    // When Avihu delivers the library:
+    //   1. Add qsb/reference/ as submodule
+    //   2. Replace this entire function with the real call
+    //   3. Remove this comment block
+
+    // Placeholder: return a tiny bare script (just enough for RPC/UI testing)
+    // This is an OP_RETURN with "QSB_STUB" marker for identification
+    script.clear();
+    script << OP_RETURN << std::vector<unsigned char>{'Q','S','B','_','S','T','U','B'};
+    return true;
+}
+
+bool QSBWallet::CreateQSBAddress(uint160& qsbId, CScript& script, int timeout_ms)
+{
+    if (!m_initialized) {
+        return false;
+    }
+
+    // Acquire key material from pool
+    QSBPoolEntry entry;
+    bool acquired = false;
+
+    if (timeout_ms > 0) {
+        acquired = m_pool->AcquireBlocking(entry, static_cast<uint64_t>(timeout_ms));
+    } else {
+        acquired = m_pool->Acquire(entry);
+    }
+
+    if (!acquired) {
+        return false;
+    }
+
+    // Assemble the output script (currently stub)
+    if (!AssembleQSBOutput(entry, script)) {
+        return false;
+    }
+
+    // Derive QSB ID from HORS commitments
+    // The QSB ID is Hash160 of the serialized commitments
+    if (entry.keys.commitments.empty()) {
+        return false;
+    }
+
+    std::vector<unsigned char> serialized;
+    serialized.reserve(entry.keys.commitments.size() * 20);
+    for (const auto& commitment : entry.keys.commitments) {
+        serialized.insert(serialized.end(), commitment.begin(), commitment.end());
+    }
+
+    qsbId = Hash160(serialized);
+    return true;
 }

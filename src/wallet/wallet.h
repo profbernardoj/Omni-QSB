@@ -1236,6 +1236,21 @@ public:
     /**! Get status of QSB pool (ready count, target, running) */
     void GetQSBPoolStatus(int& ready_count, int& target_count, bool& is_running) const;
 
+    /**!
+     * Create a new QSB address from the pool.
+     * Acquires HORS key material from the pre-gen pool, assembles the
+     * output script (currently stub), and returns the QSB ID.
+     *
+     * NOTE: AssembleQSBOutput() is currently a stub awaiting Avihu's
+     * reference library. Returns a placeholder OP_RETURN script for now.
+     *
+     * @param[out] outQsbId       The QSB identifier (Hash160 of commitments)
+     * @param[out] outScriptPubKey The bare scriptPubKey
+     * @param[in]  timeout_ms     Max wait time (0 = non-blocking)
+     * @return true if address created, false if pool empty or QSB disabled
+     */
+    bool CreateQSBAddress(uint160& outQsbId, CScript& outScriptPubKey, int timeout_ms = 0);
+
 };
 
 /**

@@ -4496,3 +4496,13 @@ void CWallet::GetQSBPoolStatus(int& ready_count, int& target_count, bool& is_run
     }
     static_cast<QSBWallet*>(m_qsbWallet)->GetPoolStatus(ready_count, target_count, is_running);
 }
+
+bool CWallet::CreateQSBAddress(uint160& outQsbId, CScript& outScriptPubKey, int timeout_ms)
+{
+    // Null check: QSB not enabled on this wallet
+    if (!m_qsbWallet) {
+        return false;
+    }
+
+    return static_cast<QSBWallet*>(m_qsbWallet)->CreateQSBAddress(outQsbId, outScriptPubKey, timeout_ms);
+}

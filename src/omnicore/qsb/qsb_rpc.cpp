@@ -12,6 +12,7 @@
 #include <rpc/server.h>
 #include <rpc/util.h>
 #include <script/standard.h>
+#include <uint256.h>
 #include <wallet/rpcwallet.h>
 #include <wallet/wallet.h>
 
@@ -85,17 +86,19 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
 
     RPCHelpMan{"createqsbaddress",
         "\nCreates a new Quantum-Safe Bitcoin address from the pre-generation pool.\n"
-        "\nThe address is derived from HORS commitments and can be used for quantum-safe transactions.\n",
+        "\nThe address is derived from HORS commitments and can be used for quantum-safe transactions.\n"
+        "\nNOTE: This is a STUB implementation. The final assembly awaits Avihu Levy's reference library.\n",
         {
             {"config", RPCArg::Type::STR, RPCArg::Optional::OMITTED_NAMED_ARG, "QSB config name (default: \"Config_A\")", "Config_A"},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
             {
-                {RPCResult::Type::STR, "address", "The QSB address (Bech32 encoded, qs1... for mainnet)"},
-                {RPCResult::Type::STR_HEX, "commitment", "The commitment hash (20 bytes, hex)"},
-                {RPCResult::Type::STR, "config", "The QSB configuration used"},
+                {RPCResult::Type::STR, "address", "The QSB address (Bech32 encoded: qs1... for mainnet, qst1... for testnet, qsrt1... for regtest)"},
+                {RPCResult::Type::STR_HEX, "scriptPubKey", "The raw scriptPubKey (hex)"},
+                {RPCResult::Type::STR, "status", "Address creation status (\"ready\" or \"generating\")"},
                 {RPCResult::Type::NUM, "pool_ready", "Number of ready outputs remaining in pool"},
+                {RPCResult::Type::STR, "warning", "Stub implementation notice"},
             }
         },
         RPCExamples{
@@ -110,11 +113,8 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
         throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Wallet not found or not loaded");
     }
 
-    // Get config name (default: Config_A)
-    std::string configName = "Config_A";
-    if (request.params.size() > 0 && !request.params[0].isNull()) {
-        configName = request.params[0].get_str();
-    }
+    // Ensure wallet is unlocked for key operations
+    EnsureWalletIsUnlocked(pwallet);
 
     // Check if pool is running
     int ready_count = 0;
@@ -123,22 +123,32 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
     pwallet->GetQSBPoolStatus(ready_count, target_count, is_running);
 
     if (!is_running) {
-        throw JSONRPCError(RPC_MISC_ERROR, "QSB pool not initialized. Call StartQSBPool first.");
+        throw JSONRPCError(RPC_MISC_ERROR, "QSB pool not initialized. The pool starts automatically when wallet loads. Try again in a few seconds.");
     }
 
-    // TODO: Acquire ready output from pool once CWallet exposes AcquireQSBOutput()
-    // For now, return placeholder until full output acquisition is wired
-    //
-    // Future flow:
-    //   QSBPoolEntry entry;
-    //   if (!pwallet->AcquireQSBOutput(entry)) { throw ... }
-    //   std::string addr = QSBWallet::EncodeAddress(entry.script, Params());
+    if (ready_count == 0) {
+        throw JSONRPCError(RPC_MISC_ERROR, "QSB pool is empty. The background worker is still generating addresses (usually 1-5 seconds). Try again shortly.");
+    }
+
+    // Acquire ready output from pool
+    uint160 qsbId;
+    CScript scriptPubKey;
+
+    if (!pwallet->CreateQSBAddress(qsbId, scriptPubKey)) {
+        throw JSONRPCError(RPC_MISC_ERROR, "Failed to create QSB address. Pool may be exhausted. Try again in a few moments.");
+    }
+
+    // Encode the QSB ID as a Bech32 address
+    // QSBHash is a CTxDestination subtype that encodes to qs1... / qst1... / qsrt1...
+    QSBHash qsbHash(qsbId);
+    std::string address = EncodeDestination(qsbHash);
 
     UniValue result(UniValue::VOBJ);
-    result.pushKV("address", "qs1qqqqqqqqqqqqqqqqqqqqqqqqqqqyqnpage"); // Placeholder
-    result.pushKV("commitment", "0000000000000000000000000000000000000000"); // Placeholder
-    result.pushKV("config", configName);
-    result.pushKV("pool_ready", ready_count);
+    result.pushKV("address", address);
+    result.pushKV("scriptPubKey", HexStr(scriptPubKey));
+    result.pushKV("status", "ready");
+    result.pushKV("pool_ready", ready_count - 1);  // One was just consumed
+    result.pushKV("warning", "STUB: Final assembly awaits Avihu Levy's reference library. This address uses a placeholder script.");
 
     return result;
 }

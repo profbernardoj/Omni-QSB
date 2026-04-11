@@ -159,6 +159,32 @@ public:
      */
     bool VerifyResult(const QSBJob& job, const MorpheusJobResult& result, const HORSKeyMaterial& keys);
 
+    /**
+     * Assemble the final QSB output script (bare scriptPubKey).
+     *
+     * NOTE: This is a STUB implementation awaiting Avihu Levy's reference library.
+     * The real implementation will call QSBReferenceLib::AssembleBareScript()
+     * to produce the ~9,650-byte script with HORS commitments and pinning puzzle.
+     *
+     * This stub returns a minimal OP_RETURN placeholder for RPC/UI testing.
+     *
+     * @param[in]  entry   Pre-generated HORS key entry from pool
+     * @param[out] script  The assembled output script (placeholder)
+     * @return true on success (always true for stub)
+     */
+    bool AssembleQSBOutput(const QSBPoolEntry& entry, CScript& script);
+
+    /**
+     * Create a ready-to-use QSB address.
+     * Acquires key material from pool, assembles output script, and derives the QSB ID.
+     *
+     * @param[out] qsbId      The QSB identifier (Hash160 of serialized commitments)
+     * @param[out] script     The bare scriptPubKey
+     * @param[in]  timeout_ms  Max time to wait for pool (0 = non-blocking)
+     * @return true if address created, false if pool empty or QSB not initialized
+     */
+    bool CreateQSBAddress(uint160& qsbId, CScript& script, int timeout_ms = 0);
+
 private:
     std::unique_ptr<QSBPreGenPool> m_pool;
     std::unique_ptr<QSBMorpheusClient> m_client;
