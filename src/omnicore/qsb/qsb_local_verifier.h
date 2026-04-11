@@ -39,6 +39,8 @@ struct QSBDigestResult {
 struct HORSKeyMaterial {
     std::vector<std::vector<unsigned char>> commitments;    //!< 20-byte Hash160 commitments (public)
     std::vector<std::vector<unsigned char>> preimages;      //!< 32-byte secret preimages (private)
+    std::vector<unsigned char> scriptcode_midstate;         //!< 32-byte SHA-256 midstate of fixed script prefix
+    std::vector<std::vector<unsigned char>> dummy_sigs;     //!< ~150 DER-encoded dummy signatures per round
     int num_keys;                                           //!< Total number of HORS keys (e.g. 150)
 };
 
