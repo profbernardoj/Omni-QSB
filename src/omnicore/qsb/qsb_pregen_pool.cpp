@@ -69,7 +69,7 @@ bool QSBPreGenPool::IsRunning() const
 
 bool QSBPreGenPool::Acquire(QSBPoolEntry& entry)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
 
     if (m_pool.empty()) {
         return false;
@@ -183,8 +183,10 @@ HORSKeyMaterial QSBPreGenPool::GenerateHORSKeyMaterial(uint64_t seed_entropy, in
         keys.scriptcode_midstate[i] = static_cast<unsigned char>(rng() & 0xFF);
     }
 
-    // Generate dummy signatures (minimal valid DER for testing)
-    // In production, these come from wallet signing dummy data
+    // Generate dummy signatures (minimal valid DER for pre-gen pool).
+    // NOTE: Real dummy sigs will come from wallet signing in final assembly
+    // (AssembleQSBOutput). These placeholders ensure the key material struct
+    // is complete for job building and verification pipeline testing.
     keys.dummy_sigs.reserve(num_keys);
     for (int i = 0; i < num_keys; ++i) {
         std::vector<unsigned char> sig = {
@@ -254,7 +256,7 @@ void QSBPreGenPool::WorkerThread()
 
         // Add to pool
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            std::unique_lock<std::mutex> lock(m_mutex);
 
             if (m_pool.size() < static_cast<size_t>(m_config.max_size)) {
                 m_pool.push_back(std::move(entry));
