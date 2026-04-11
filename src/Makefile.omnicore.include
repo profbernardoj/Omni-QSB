@@ -104,6 +104,7 @@ OMNICORE_CPP = \
 
 if ENABLE_WALLET
 OMNICORE_CPP += omnicore/rpctx.cpp
+OMNICORE_CPP += omnicore/qsb/qsb_rpc.cpp
 endif
 
 libbitcoin_server_a_SOURCES += \

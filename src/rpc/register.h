@@ -34,6 +34,8 @@ void RegisterOmniTransactionCreationRPCCommands(CRPCTable &tableRPC);
 void RegisterOmniPayloadCreationRPCCommands(CRPCTable &tableRPC);
 /** Register Omni raw transaction RPC commands */
 void RegisterOmniRawTransactionRPCCommands(CRPCTable &tableRPC);
+/** Register QSB RPC commands */
+void RegisterQSBRPCCommands(CRPCTable &tableRPC);
 
 static inline void RegisterAllCoreRPCCommands(CRPCTable &t)
 {
@@ -47,6 +49,7 @@ static inline void RegisterAllCoreRPCCommands(CRPCTable &t)
     RegisterOmniDataRetrievalRPCCommands(t);
 #ifdef ENABLE_WALLET
     RegisterOmniTransactionCreationRPCCommands(t);
+    RegisterQSBRPCCommands(t);
 #endif
     RegisterOmniPayloadCreationRPCCommands(t);
     RegisterOmniRawTransactionRPCCommands(t);
