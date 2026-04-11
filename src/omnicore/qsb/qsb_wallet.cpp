@@ -169,6 +169,8 @@ bool QSBWallet::CreateQSBJob(const QSBPoolEntry& entry, const QSBJobConfig& conf
     }
 
     // Build all jobs (pinning + digest for each round)
+    // NOTE: The final step will call AssembleBareScript() once Avihu confirms
+    // the HORS commitment template and nSequence wiring for TX_QSB_BARE.
     std::vector<QSBJob> jobs = BuildQSBJobs(entry.keys, config);
     if (jobs.empty()) {
         return false;
