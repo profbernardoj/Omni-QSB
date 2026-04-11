@@ -21,20 +21,6 @@
 
 /**
  * Returns the QSB pool status.
- *
- * Arguments: none
- *
- * Result:
- * {
- *   "ready": n,      (int) Number of ready QSB outputs in pool
- *   "target": n,     (int) Target pool size
- *   "running": bool, (bool) Whether pool worker is running
- *   "config": {      (object) Pool configuration
- *     "max_size": n,
- *     "min_size": n,
- *     "hors_num_keys": n
- *   }
- * }
  */
 static UniValue qsbpoolstatus(const JSONRPCRequest& request)
 {
@@ -69,12 +55,16 @@ static UniValue qsbpoolstatus(const JSONRPCRequest& request)
         throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Wallet not found or not loaded");
     }
 
-    // TODO: Get QSBWallet from CWallet once integrated
-    // For now, return a placeholder status
+    int ready_count = 0;
+    int target_count = 0;
+    bool is_running = false;
+
+    pwallet->GetQSBPoolStatus(ready_count, target_count, is_running);
+
     UniValue result(UniValue::VOBJ);
-    result.pushKV("ready", 0);
-    result.pushKV("target", 5);
-    result.pushKV("running", false);
+    result.pushKV("ready", ready_count);
+    result.pushKV("target", target_count);
+    result.pushKV("running", is_running);
 
     UniValue config(UniValue::VOBJ);
     config.pushKV("max_size", QSBWallet::DEFAULT_MAX_POOL_SIZE);
@@ -87,16 +77,6 @@ static UniValue qsbpoolstatus(const JSONRPCRequest& request)
 
 /**
  * Creates a new QSB address from the pool.
- *
- * Arguments:
- * 1. config        (string, optional) QSB config name (default: "Config_A")
- *
- * Result:
- * {
- *   "address": "qs1...",     (string) The QSB address (Bech32 encoded)
- *   "commitment": "hex",     (string) The commitment hash (hex)
- *   "config": "Config_A",    (string) The QSB config used
- * }
  */
 static UniValue createqsbaddress(const JSONRPCRequest& request)
 {
@@ -115,6 +95,7 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
                 {RPCResult::Type::STR, "address", "The QSB address (Bech32 encoded, qs1... for mainnet)"},
                 {RPCResult::Type::STR_HEX, "commitment", "The commitment hash (20 bytes, hex)"},
                 {RPCResult::Type::STR, "config", "The QSB configuration used"},
+                {RPCResult::Type::NUM, "pool_ready", "Number of ready outputs remaining in pool"},
             }
         },
         RPCExamples{
@@ -135,30 +116,39 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
         configName = request.params[0].get_str();
     }
 
-    // TODO: Integrate with CWallet to get QSBWallet instance
-    // For now, return a placeholder response
+    // Check if pool is running
+    int ready_count = 0;
+    int target_count = 0;
+    bool is_running = false;
+    pwallet->GetQSBPoolStatus(ready_count, target_count, is_running);
+
+    if (!is_running) {
+        throw JSONRPCError(RPC_MISC_ERROR, "QSB pool not initialized. Call StartQSBPool first.");
+    }
+
+    // TODO: Acquire ready output from pool once CWallet exposes AcquireQSBOutput()
+    // For now, return placeholder until full output acquisition is wired
     //
-    // Future integration:
-    // QSBWallet& qsb = pwallet->GetQSBWallet();
-    // QSBPoolEntry entry;
-    // if (!qsb.AcquireReadyOutputBlocking(entry, 5000)) {
-    //     throw JSONRPCError(RPC_MISC_ERROR, "Failed to acquire QSB output from pool");
-    // }
+    // Future flow:
+    //   QSBPoolEntry entry;
+    //   if (!pwallet->AcquireQSBOutput(entry)) { throw ... }
+    //   std::string addr = QSBWallet::EncodeAddress(entry.script, Params());
 
     UniValue result(UniValue::VOBJ);
     result.pushKV("address", "qs1qqqqqqqqqqqqqqqqqqqqqqqqqqqyqnpage"); // Placeholder
     result.pushKV("commitment", "0000000000000000000000000000000000000000"); // Placeholder
     result.pushKV("config", configName);
+    result.pushKV("pool_ready", ready_count);
 
     return result;
 }
 
 // Register QSB RPC commands
 static const CRPCCommand commands[] =
-{ //  category              name              actor              argNames
-   //  -------------------  ---------------- ------------------ ----------
-    { "qsb",                "qsbpoolstatus",   &qsbpoolstatus,    {} },
-    { "qsb",                "createqsbaddress", &createqsbaddress, {"config"} },
+{ //  category              name                actor               argNames
+  //  -------------------  ------------------  ------------------  ----------
+    { "qsb",               "qsbpoolstatus",    &qsbpoolstatus,     {} },
+    { "qsb",               "createqsbaddress", &createqsbaddress,  {"config"} },
 };
 
 void RegisterQSBRPCCommands(CRPCTable &tableRPC)

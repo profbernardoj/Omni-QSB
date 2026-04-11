@@ -33,6 +33,9 @@
 #include <validation.h>
 #include <wallet/coincontrol.h>
 #include <wallet/fees.h>
+#include <univalue.h>
+
+#include <omnicore/qsb/qsb_wallet.h>
 
 #include <algorithm>
 #include <assert.h>
@@ -4444,5 +4447,50 @@ void CWallet::ConnectScriptPubKeyManNotifiers()
     for (const auto& spk_man : GetActiveScriptPubKeyMans()) {
         spk_man->NotifyWatchonlyChanged.connect(NotifyWatchonlyChanged);
         spk_man->NotifyCanGetAddressesChanged.connect(NotifyCanGetAddressesChanged);
+    }
+}
+
+// Destructor defined here (not inline in header).
+// QSBWallet lifecycle is managed explicitly via StartQSBPool/StopQSBPool.
+// The m_qsbWallet pointer is null for tools like bitcoin-wallet that don't use QSB.
+CWallet::~CWallet()
+{
+    // Should not have slots connected at this point.
+    assert(NotifyUnload.empty());
+    // Note: QSBWallet is destroyed in StopQSBPool(), not here.
+    // This allows standalone wallet tools (bitcoin-wallet) to link without
+    // requiring QSB symbols from libbitcoin_server_a.
+    m_qsbWallet = nullptr;
+}
+
+// Quantum-Safe Bitcoin pool management
+bool CWallet::StartQSBPool()
+{
+    LOCK(cs_wallet);
+    if (!m_qsbWallet) {
+        m_qsbWallet = new QSBWallet();
+    }
+    static_cast<QSBWallet*>(m_qsbWallet)->Initialize();
+    return true;
+}
+
+void CWallet::StopQSBPool()
+{
+    LOCK(cs_wallet);
+    if (m_qsbWallet) {
+        static_cast<QSBWallet*>(m_qsbWallet)->Shutdown();
+        delete static_cast<QSBWallet*>(m_qsbWallet);
+        m_qsbWallet = nullptr;
+    }
+}
+
+void CWallet::GetQSBPoolStatus(int& ready_count, int& target_count, bool& is_running) const
+{
+    if (m_qsbWallet) {
+        static_cast<QSBWallet*>(m_qsbWallet)->GetPoolStatus(ready_count, target_count, is_running);
+    } else {
+        ready_count = 0;
+        target_count = 0;
+        is_running = false;
     }
 }

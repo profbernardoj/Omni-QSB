@@ -721,6 +721,9 @@ private:
     // ScriptPubKeyMan::GetID. In many cases it will be the hash of an internal structure
     std::map<uint256, std::unique_ptr<ScriptPubKeyMan>> m_spk_managers;
 
+    //! Quantum-Safe Bitcoin wallet integration (opaque, defined in wallet.cpp)
+    void* m_qsbWallet{nullptr};
+
 public:
     /*
      * Main wallet lock.
@@ -763,11 +766,7 @@ public:
     {
     }
 
-    ~CWallet()
-    {
-        // Should not have slots connected at this point.
-        assert(NotifyUnload.empty());
-    }
+    ~CWallet();
 
     bool IsCrypted() const;
     bool IsLocked() const override;
@@ -1225,6 +1224,15 @@ public:
 
     //! Connect the signals from ScriptPubKeyMans to the signals in CWallet
     void ConnectScriptPubKeyManNotifiers();
+
+    // Quantum-Safe Bitcoin pool management
+    /**! Start the QSB pre-generation pool */
+    bool StartQSBPool();
+    /**! Stop the QSB pre-generation pool */
+    void StopQSBPool();
+    /**! Get status of QSB pool (ready count, target, running) */
+    void GetQSBPoolStatus(int& ready_count, int& target_count, bool& is_running) const;
+
 };
 
 /**
