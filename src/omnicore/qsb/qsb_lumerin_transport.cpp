@@ -155,8 +155,9 @@ std::string QSBLumerinTransport::CreateEscrow(const std::string& mor_amount)
     //   2. Call MOR escrow contract: lock(amount, timeout_blocks)
     //   3. Return actual transaction hash
     //
-    // For now: deterministic placeholder based on amount content
-    // This allows the pipeline to be tested end-to-end without Base chain
+    // For now: deterministic placeholder based on amount content.
+    // This allows the pipeline to be tested end-to-end without Base chain.
+    // Deterministic for test reproducibility.
     std::ostringstream oss;
     oss << "0x";
     // Use amount content for deterministic but unique txid
