@@ -38,7 +38,8 @@ OMNICORE_TEST_CPP = \
   omnicore/test/qsb_local_verifier_tests.cpp \
   omnicore/test/qsb_job_builder_tests.cpp \
   omnicore/test/qsb_morpheus_client_tests.cpp \
-  omnicore/test/qsb_pregen_pool_tests.cpp
+  omnicore/test/qsb_pregen_pool_tests.cpp \
+  omnicore/test/qsb_lumerin_transport_tests.cpp
 
 if ENABLE_WALLET
 OMNICORE_TEST_CPP += omnicore/test/funded_send_tests.cpp

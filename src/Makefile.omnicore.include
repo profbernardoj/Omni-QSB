@@ -46,7 +46,8 @@ OMNICORE_H = \
   omnicore/qsb/qsb_local_verifier.h \
   omnicore/qsb/qsb_job_builder.h \
   omnicore/qsb/qsb_morpheus_client.h \
-  omnicore/qsb/qsb_pregen_pool.h
+  omnicore/qsb/qsb_pregen_pool.h \
+  omnicore/qsb/qsb_lumerin_transport.h
 
 OMNICORE_CPP = \
   omnicore/activation.cpp \
@@ -96,7 +97,8 @@ OMNICORE_CPP = \
   omnicore/qsb/qsb_local_verifier.cpp \
   omnicore/qsb/qsb_job_builder.cpp \
   omnicore/qsb/qsb_morpheus_client.cpp \
-  omnicore/qsb/qsb_pregen_pool.cpp
+  omnicore/qsb/qsb_pregen_pool.cpp \
+  omnicore/qsb/qsb_lumerin_transport.cpp
 
 if ENABLE_WALLET
 OMNICORE_CPP += omnicore/rpctx.cpp
