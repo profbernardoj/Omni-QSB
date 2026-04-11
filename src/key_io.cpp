@@ -68,13 +68,23 @@ public:
 
     std::string operator()(const QSBHash& id) const
     {
-        // QSB addresses use Bech32m encoding with "qs" HRP
-        // Version byte = 0, payload = 20 bytes (Hash160 of HORS commitments)
-        std::vector<unsigned char> data = {0};
+        // QSB addresses use Bech32 encoding with network-specific HRP:
+        //   mainnet: "qs"  → qs1...
+        //   testnet: "qst" → qst1...
+        //   regtest: "qsrt" → qsrt1...
+        std::vector<unsigned char> data = {0}; // version byte = 0
         data.reserve(33);
         ConvertBits<8, 5, true>([&](unsigned char c) { data.push_back(c); }, id.begin(), id.end());
-        // Use "qs" for mainnet, "qs" for testnet too (differentiated by the network context)
-        return bech32::Encode("qs", data);
+        std::string hrp;
+        const std::string& bech32hrp = m_params.Bech32HRP();
+        if (bech32hrp == "bc") {
+            hrp = "qs";     // mainnet
+        } else if (bech32hrp == "tb") {
+            hrp = "qst";    // testnet
+        } else {
+            hrp = "qsrt";   // regtest / other
+        }
+        return bech32::Encode(hrp, data);
     }
 
     std::string operator()(const CNoDestination& no) const { return {}; }
@@ -137,18 +147,30 @@ CTxDestination DecodeDestination(const std::string& str, const CChainParams& par
         }
     }
 
-    // QSB Bech32 address: "qs1..." (Bech32 with HRP "qs")
+    // QSB Bech32 address: "qs1..." (mainnet), "qst1..." (testnet), "qsrt1..." (regtest)
     data.clear();
     auto qsbBech = bech32::Decode(str);
-    if (qsbBech.second.size() > 0 && qsbBech.first == "qs") {
-        int version = qsbBech.second[0];
-        if (version == 0) {
-            data.reserve(((qsbBech.second.size() - 1) * 5) / 8);
-            if (ConvertBits<5, 8, false>([&](unsigned char c) { data.push_back(c); }, qsbBech.second.begin() + 1, qsbBech.second.end())) {
-                if (data.size() == 20) {
-                    uint160 qsbHash;
-                    std::copy(data.begin(), data.end(), qsbHash.begin());
-                    return QSBHash(qsbHash);
+    if (qsbBech.second.size() > 0) {
+        // Determine expected QSB HRP for this network
+        std::string expectedHrp;
+        const std::string& bech32hrp = params.Bech32HRP();
+        if (bech32hrp == "bc") {
+            expectedHrp = "qs";
+        } else if (bech32hrp == "tb") {
+            expectedHrp = "qst";
+        } else {
+            expectedHrp = "qsrt";
+        }
+        if (qsbBech.first == expectedHrp) {
+            int version = qsbBech.second[0];
+            if (version == 0) {
+                data.reserve(((qsbBech.second.size() - 1) * 5) / 8);
+                if (ConvertBits<5, 8, false>([&](unsigned char c) { data.push_back(c); }, qsbBech.second.begin() + 1, qsbBech.second.end())) {
+                    if (data.size() == 20) {
+                        uint160 qsbHash;
+                        std::copy(data.begin(), data.end(), qsbHash.begin());
+                        return QSBHash(qsbHash);
+                    }
                 }
             }
         }

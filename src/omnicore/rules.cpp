@@ -242,7 +242,7 @@ CMainConsensusParams::CMainConsensusParams()
     MULTISIG_BLOCK = 0;
     NULLDATA_BLOCK = 395000;
     //! Block to enable QSB bare script support
-    QSB_BLOCK = 999999; // TBD after testnet activation
+    QSB_BLOCK = std::numeric_limits<int>::max(); // TBD: set after successful testnet activation
     // Transaction restrictions:
     MSC_ALERT_BLOCK = 0;
     MSC_SEND_BLOCK = 249498;
