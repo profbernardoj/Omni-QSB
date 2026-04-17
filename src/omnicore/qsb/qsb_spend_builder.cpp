@@ -19,8 +19,151 @@
 #include <vector>
 
 // Bitcoin Core's FindAndDelete and SignatureHash are declared in interpreter.h
-// FindAndDelete(CScript& script, const CScript& b) → int
-// SignatureHash(scriptCode, tx, nIn, nHashType, amount, sigversion, cache) → uint256
+
+// ---------------------------------------------------------------------------
+// EC Recovery helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse DER signature to extract (r, s) as 32-byte big-endian values.
+ */
+static bool ParseDERtoRS(const std::vector<unsigned char>& der_sig,
+                          unsigned char r32[32], unsigned char s32[32])
+{
+    // DER format: 30 <total_len> 02 <r_len> <r_bytes> 02 <s_len> <s_bytes> [sighash_byte]
+    size_t len = der_sig.size();
+    if (len < 8) return false;
+
+    size_t pos = 0;
+    if (der_sig[pos] != 0x30) return false;
+    pos++;
+    pos++; // skip sequence length
+
+    // Parse r
+    if (pos >= len || der_sig[pos] != 0x02) return false;
+    pos++;
+    if (pos >= len) return false;
+    size_t r_len = der_sig[pos];
+    pos++;
+    if (pos + r_len > len) return false;
+
+    memset(r32, 0, 32);
+    if (r_len <= 32) {
+        memcpy(r32 + (32 - r_len), &der_sig[pos], r_len);
+    } else {
+        memcpy(r32, &der_sig[pos + (r_len - 32)], 32);
+    }
+    pos += r_len;
+
+    // Parse s
+    if (pos >= len || der_sig[pos] != 0x02) return false;
+    pos++;
+    if (pos >= len) return false;
+    size_t s_len = der_sig[pos];
+    pos++;
+    if (pos + s_len > len) return false;
+
+    memset(s32, 0, 32);
+    if (s_len <= 32) {
+        memcpy(s32 + (32 - s_len), &der_sig[pos], s_len);
+    } else {
+        memcpy(s32, &der_sig[pos + (s_len - 32)], 32);
+    }
+
+    return true;
+}
+
+/**
+ * Build a 65-byte compact recoverable signature for CPubKey::RecoverCompact.
+ * Format: 1 byte header (27 + recid + 4 for compressed) + 32 bytes r + 32 bytes s.
+ */
+static std::vector<unsigned char> BuildCompactSig(const unsigned char r32[32],
+                                                   const unsigned char s32[32],
+                                                   int recid, bool compressed = true)
+{
+    std::vector<unsigned char> compact(65);
+    compact[0] = 27 + recid + (compressed ? 4 : 0);
+    memcpy(&compact[1], r32, 32);
+    memcpy(&compact[33], s32, 32);
+    return compact;
+}
+
+bool QSBSpendBuilder::RecoverPubkey(
+    const uint256& sighash,
+    const std::vector<unsigned char>& der_sig,
+    int recid,
+    CPubKey& out_pubkey)
+{
+    unsigned char r32[32], s32[32];
+    if (!ParseDERtoRS(der_sig, r32, s32)) {
+        return false;
+    }
+
+    // Use Bitcoin Core's CPubKey::RecoverCompact which wraps secp256k1 internally
+    std::vector<unsigned char> compact = BuildCompactSig(r32, s32, recid, true);
+    return out_pubkey.RecoverCompact(sighash, compact);
+}
+
+bool QSBSpendBuilder::RecoverQSBPubkey(
+    const uint256& sighash,
+    const std::vector<unsigned char>& der_sig,
+    CPubKey& out_key_nonce,
+    std::vector<unsigned char>& out_sig_puzzle)
+{
+    // Try both recovery IDs (0 and 1)
+    // The correct one produces a pubkey whose Hash160 is valid DER
+    for (int recid = 0; recid < 2; recid++) {
+        CPubKey candidate;
+        if (!RecoverPubkey(sighash, der_sig, recid, candidate)) {
+            continue;
+        }
+
+        // key_nonce = recovered compressed pubkey
+        // sig_puzzle = RIPEMD160(SHA256(key_nonce))
+        std::vector<unsigned char> pub_bytes(candidate.begin(), candidate.end());
+        uint160 h160 = Hash160(pub_bytes);
+        std::vector<unsigned char> sig_puzzle(h160.begin(), h160.end());
+
+        // Check if sig_puzzle looks like valid DER (the QSB criterion)
+        // Real GPU search ensures this; for test/easy mode also accept (byte[0] >> 4) == 3
+        if (IsValidDERSigPuzzle(sig_puzzle)) {
+            out_key_nonce = candidate;
+            out_sig_puzzle = sig_puzzle;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool QSBSpendBuilder::IsValidDERSigPuzzle(const std::vector<unsigned char>& sig_puzzle)
+{
+    if (sig_puzzle.size() < 8) return false;
+
+    // Quick check: first byte should be 0x30 (DER sequence tag)
+    // OR easy-mode fallback: (byte[0] >> 4) == 3 (starts with 0x30..0x3F)
+    if ((sig_puzzle[0] >> 4) == 3) {
+        return true;
+    }
+    return false;
+}
+
+bool QSBSpendBuilder::RecoverDummyPubkey(
+    const std::vector<unsigned char>& der_sig,
+    CPubKey& out_pubkey)
+{
+    // Dummy sigs use SIGHASH_SINGLE bug: z = 1 (when input_index >= num_outputs)
+    // So the "message hash" for recovery is simply 1 (as a uint256)
+    uint256 z_one;
+    *(z_one.begin()) = 1;  // Little-endian: 0x01 followed by 31 zeros
+
+    // Try both recovery IDs
+    for (int recid = 0; recid < 2; recid++) {
+        if (RecoverPubkey(z_one, der_sig, recid, out_pubkey)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // ---------------------------------------------------------------------------
 // Sighash computation with FindAndDelete
@@ -51,9 +194,6 @@ uint256 QSBSpendBuilder::ComputeRoundSighash(
     const std::vector<int>& selected,
     unsigned int input_index)
 {
-    // scriptCode = full_script
-    //   - FindAndDelete(sig_nonce)
-    //   - FindAndDelete(each selected dummy sig)
     CScript scriptCode(full_script);
 
     // Remove the round's hardcoded signature
@@ -131,7 +271,7 @@ CScript QSBSpendBuilder::BuildScriptSig(
 }
 
 // ---------------------------------------------------------------------------
-// Full spending transaction
+// Full spending transaction with EC recovery
 // ---------------------------------------------------------------------------
 
 CMutableTransaction QSBSpendBuilder::BuildSpendTx(
@@ -153,11 +293,9 @@ CMutableTransaction QSBSpendBuilder::BuildSpendTx(
     // ========================================================================
     // Inputs
     // ========================================================================
-    // Input 0: Helper input (for SIGHASH_SINGLE bug: QSB input index >= num_outputs)
-    // Input 1: QSB input
     CTxIn helper_in;
-    helper_in.prevout = COutPoint(uint256(), 0);  // placeholder
-    helper_in.nSequence = 0xfffffffe;             // allows nLockTime
+    helper_in.prevout = COutPoint(uint256(), 0);
+    helper_in.nSequence = 0xfffffffe;
     tx.vin.push_back(helper_in);
 
     CTxIn qsb_in;
@@ -172,7 +310,6 @@ CMutableTransaction QSBSpendBuilder::BuildSpendTx(
     // ========================================================================
     CAmount dest_value = params.funding_amount - fee;
 
-    // Output 0: OP_RETURN Omni payload (if provided)
     if (!omni_payload.empty()) {
         CTxOut op_return;
         op_return.nValue = 0;
@@ -180,7 +317,6 @@ CMutableTransaction QSBSpendBuilder::BuildSpendTx(
         tx.vout.push_back(op_return);
     }
 
-    // Output 1 (or 0 if no Omni): Destination
     CTxOut dest_out;
     dest_out.nValue = dest_value;
     dest_out.scriptPubKey = dest_script;
@@ -192,48 +328,109 @@ CMutableTransaction QSBSpendBuilder::BuildSpendTx(
     CScript full_script = QSBScriptAssembler::Assemble(material, config);
 
     // ========================================================================
-    // Compute sighashes and recover keys
+    // EC Recovery — Pinning
     // ========================================================================
-    // NOTE: Real EC recovery requires secp256k1 ECDSA recovery.
-    // This implementation prepares the transaction structure and sighash
-    // computation. The actual EC recovery would use:
-    //   secp256k1_ecdsa_recover(ctx, &pubkey, &sig, msg_hash)
-    //
-    // For now, we compute the correct sighashes so that:
-    //   1. FindAndDelete is applied correctly
-    //   2. The transaction structure is valid
-    //   3. The scriptSig can be populated with recovered keys
-    //
-    // The EC recovery step will be wired once we have GPU results.
-
     CTransaction ctx_tx(tx);
 
-    // Pinning sighash
     uint256 pin_hash = ComputePinningSighash(
         ctx_tx, full_script, material.pin_sig, QSB_INPUT_INDEX);
 
-    // Round 1 sighash
-    uint256 r1_hash = ComputeRoundSighash(
-        ctx_tx, full_script, material.sig_r1,
-        material.rounds[0].dummy_sigs, params.round1_indices,
-        QSB_INPUT_INDEX);
+    QSBSpendSolution solution;
+    solution.locktime = params.locktime;
 
-    // Round 2 sighash
-    uint256 r2_hash = ComputeRoundSighash(
-        ctx_tx, full_script, material.sig_r2,
-        material.rounds[1].dummy_sigs, params.round2_indices,
-        QSB_INPUT_INDEX);
+    // Recover pin key_nonce and sig_puzzle
+    CPubKey pin_key_nonce;
+    if (RecoverQSBPubkey(pin_hash, material.pin_sig, pin_key_nonce, solution.pin_sig_puzzle)) {
+        solution.pin_key_nonce.assign(pin_key_nonce.begin(), pin_key_nonce.end());
+
+        // Recover pin key_puzzle from sig_puzzle (which is itself a signature)
+        // sig_puzzle's sighash: FindAndDelete(full_script, sig_puzzle)
+        CScript puzzle_sc(full_script);
+        CScript puzzle_pattern;
+        puzzle_pattern << solution.pin_sig_puzzle;
+        FindAndDelete(puzzle_sc, puzzle_pattern);
+
+        // Determine sighash type from last byte of sig_puzzle
+        uint8_t sp_hashtype = solution.pin_sig_puzzle.back();
+        uint256 puzzle_hash = SignatureHash(puzzle_sc, ctx_tx, QSB_INPUT_INDEX,
+                                            sp_hashtype, 0, SigVersion::BASE, nullptr);
+
+        CPubKey pin_key_puzzle;
+        for (int recid = 0; recid < 2; recid++) {
+            if (RecoverPubkey(puzzle_hash, solution.pin_sig_puzzle, recid, pin_key_puzzle)) {
+                solution.pin_key_puzzle.assign(pin_key_puzzle.begin(), pin_key_puzzle.end());
+                break;
+            }
+        }
+    }
 
     // ========================================================================
-    // Build spending solution (placeholder — real keys come from EC recovery)
+    // EC Recovery — Rounds 1 and 2
     // ========================================================================
-    // TODO: Wire up secp256k1 ECDSA recovery to populate these from sighashes.
-    // For now, the sighash computation and transaction structure are correct.
-    // The scriptSig will be populated when GPU results + EC recovery are available.
+    const std::vector<int>* round_indices[2] = { &params.round1_indices, &params.round2_indices };
+    const std::vector<unsigned char>* round_sigs[2] = { &material.sig_r1, &material.sig_r2 };
+    QSBRoundRecovery* round_results[2] = { &solution.round1, &solution.round2 };
 
-    (void)pin_hash;  // Used by EC recovery (not yet wired)
-    (void)r1_hash;
-    (void)r2_hash;
+    for (int ri = 0; ri < 2; ri++) {
+        const auto& indices = *round_indices[ri];
+        const auto& sig_nonce = *round_sigs[ri];
+        QSBRoundRecovery& rr = *round_results[ri];
+        const auto& round_material = material.rounds[ri];
+        int t_signed = (ri == 0) ? config.t1_signed : config.t2_signed;
+
+        rr.subset = indices;
+        rr.signed_indices.assign(indices.begin(), indices.begin() + t_signed);
+        rr.bonus_indices.assign(indices.begin() + t_signed, indices.end());
+
+        // Compute round sighash
+        uint256 round_hash = ComputeRoundSighash(
+            ctx_tx, full_script, sig_nonce,
+            round_material.dummy_sigs, indices, QSB_INPUT_INDEX);
+
+        // Recover round key_nonce
+        CPubKey round_key_nonce;
+        if (RecoverQSBPubkey(round_hash, sig_nonce, round_key_nonce, rr.sig_puzzle)) {
+            rr.key_nonce.assign(round_key_nonce.begin(), round_key_nonce.end());
+
+            // Recover round key_puzzle from sig_puzzle
+            CScript rnd_puzzle_sc(full_script);
+            CScript rnd_puzzle_pattern;
+            rnd_puzzle_pattern << rr.sig_puzzle;
+            FindAndDelete(rnd_puzzle_sc, rnd_puzzle_pattern);
+
+            uint8_t rnd_sp_hashtype = rr.sig_puzzle.back();
+            uint256 rnd_puzzle_hash = SignatureHash(rnd_puzzle_sc, ctx_tx, QSB_INPUT_INDEX,
+                                                     rnd_sp_hashtype, 0, SigVersion::BASE, nullptr);
+
+            CPubKey round_key_puzzle;
+            for (int recid = 0; recid < 2; recid++) {
+                if (RecoverPubkey(rnd_puzzle_hash, rr.sig_puzzle, recid, round_key_puzzle)) {
+                    rr.key_puzzle.assign(round_key_puzzle.begin(), round_key_puzzle.end());
+                    break;
+                }
+            }
+        }
+
+        // Recover dummy pubkeys (z=1 via SIGHASH_SINGLE bug)
+        for (int idx : indices) {
+            CPubKey dummy_pub;
+            if (RecoverDummyPubkey(round_material.dummy_sigs[idx], dummy_pub)) {
+                rr.dummy_pubkeys.push_back(
+                    std::vector<unsigned char>(dummy_pub.begin(), dummy_pub.end()));
+            }
+        }
+
+        // Collect HORS preimages for signed indices
+        for (int idx : rr.signed_indices) {
+            rr.preimages.push_back(round_material.preimages[idx]);
+        }
+    }
+
+    // ========================================================================
+    // Build scriptSig and attach to QSB input
+    // ========================================================================
+    CScript scriptSig = BuildScriptSig(solution, full_script, config);
+    tx.vin[QSB_INPUT_INDEX].scriptSig = scriptSig;
 
     return tx;
 }

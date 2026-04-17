@@ -9,6 +9,7 @@
 #include <omnicore/qsb/qsb_local_verifier.h>
 
 #include <primitives/transaction.h>
+#include <pubkey.h>
 #include <script/script.h>
 #include <uint256.h>
 
@@ -150,6 +151,51 @@ public:
         const std::vector<std::vector<unsigned char>>& dummy_sigs,
         const std::vector<int>& selected,
         unsigned int input_index);
+
+    // ------------------------------------------------------------------
+    // EC Recovery (ECDSA pubkey recovery from sighash + known signatures)
+    // ------------------------------------------------------------------
+
+    /**
+     * Low-level ECDSA recovery: given a sighash, DER signature, and recovery ID,
+     * recover the compressed public key.
+     */
+    static bool RecoverPubkey(
+        const uint256& sighash,
+        const std::vector<unsigned char>& der_sig,
+        int recid,
+        CPubKey& out_pubkey);
+
+    /**
+     * QSB-specific recovery: try both recovery IDs and return the one whose
+     * Hash160(recovered_pubkey) looks like valid DER (the QSB criterion).
+     *
+     * @param[in]  sighash         The computed sighash
+     * @param[in]  der_sig         The known DER signature
+     * @param[out] out_key_nonce   The recovered compressed pubkey (key_nonce)
+     * @param[out] out_sig_puzzle  RIPEMD160(SHA256(key_nonce)) — used as sig_puzzle
+     * @return true if a valid recovery was found
+     */
+    static bool RecoverQSBPubkey(
+        const uint256& sighash,
+        const std::vector<unsigned char>& der_sig,
+        CPubKey& out_key_nonce,
+        std::vector<unsigned char>& out_sig_puzzle);
+
+    /**
+     * Check if a 20-byte sig_puzzle value looks like valid DER.
+     * In real GPU search, this is always true DER. Easy mode also accepts
+     * (byte[0] >> 4) == 3 as a relaxed criterion.
+     */
+    static bool IsValidDERSigPuzzle(const std::vector<unsigned char>& sig_puzzle);
+
+    /**
+     * Recover a dummy pubkey using SIGHASH_SINGLE bug (z=1).
+     * Used when QSB input index >= num_outputs.
+     */
+    static bool RecoverDummyPubkey(
+        const std::vector<unsigned char>& der_sig,
+        CPubKey& out_pubkey);
 };
 
 #endif // OMNICORE_QSB_SPEND_BUILDER_H

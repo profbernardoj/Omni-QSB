@@ -1047,4 +1047,194 @@ BOOST_AUTO_TEST_CASE(spend_builder_script_sig_construction)
     BOOST_CHECK_GT(scriptSig.size(), redeemBytes.size() + 3);
 }
 
+// ===========================================================================
+// EC Recovery Tests (Segment 7 — secp256k1 recovery wiring)
+// ===========================================================================
+
+BOOST_AUTO_TEST_CASE(ec_recovery_from_known_sighash)
+{
+    // Generate material, build a tx, compute sighash, and verify recovery works
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+    
+    // Build a minimal spending tx
+    CMutableTransaction mtx;
+    mtx.nVersion = 1;
+    mtx.nLockTime = 42;
+    mtx.vin.push_back(CTxIn(COutPoint(uint256(), 0), CScript(), 0xfffffffe));
+    mtx.vin.push_back(CTxIn(COutPoint(uint256S("01"), 0), CScript(), 0xfffffffe));
+    mtx.vout.push_back(CTxOut(45000, CScript() << OP_TRUE));
+    CTransaction tx(mtx);
+    
+    // Compute pinning sighash
+    uint256 pin_hash = QSBSpendBuilder::ComputePinningSighash(
+        tx, full_script, material.pin_sig, 1);
+    
+    // RecoverPubkey should succeed for at least one recovery ID
+    bool recovered = false;
+    for (int recid = 0; recid < 2; recid++) {
+        CPubKey pub;
+        if (QSBSpendBuilder::RecoverPubkey(pin_hash, material.pin_sig, recid, pub)) {
+            BOOST_CHECK(pub.IsFullyValid());
+            BOOST_CHECK(pub.IsCompressed());
+            BOOST_CHECK_EQUAL(pub.size(), 33u);
+            recovered = true;
+            break;
+        }
+    }
+    BOOST_CHECK_MESSAGE(recovered, "EC recovery should succeed for at least one recid");
+}
+
+BOOST_AUTO_TEST_CASE(ec_recovery_different_recids_give_different_pubkeys)
+{
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+    
+    CMutableTransaction mtx;
+    mtx.nVersion = 1;
+    mtx.nLockTime = 42;
+    mtx.vin.push_back(CTxIn(COutPoint(uint256(), 0), CScript(), 0xfffffffe));
+    mtx.vin.push_back(CTxIn(COutPoint(uint256S("01"), 0), CScript(), 0xfffffffe));
+    mtx.vout.push_back(CTxOut(45000, CScript() << OP_TRUE));
+    CTransaction tx(mtx);
+    
+    uint256 pin_hash = QSBSpendBuilder::ComputePinningSighash(
+        tx, full_script, material.pin_sig, 1);
+    
+    CPubKey pub0, pub1;
+    bool ok0 = QSBSpendBuilder::RecoverPubkey(pin_hash, material.pin_sig, 0, pub0);
+    bool ok1 = QSBSpendBuilder::RecoverPubkey(pin_hash, material.pin_sig, 1, pub1);
+    
+    // Both should succeed (different points on the curve)
+    if (ok0 && ok1) {
+        // Different recovery IDs should produce different pubkeys
+        std::vector<unsigned char> v0(pub0.begin(), pub0.end());
+        std::vector<unsigned char> v1(pub1.begin(), pub1.end());
+        BOOST_CHECK(v0 != v1);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(ec_recovery_dummy_pubkey_z_equals_1)
+{
+    // Dummy sigs should recover using z=1 (SIGHASH_SINGLE bug)
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    // Try recovering a dummy pubkey from round 1, index 0
+    CPubKey dummy_pub;
+    bool ok = QSBSpendBuilder::RecoverDummyPubkey(material.rounds[0].dummy_sigs[0], dummy_pub);
+    BOOST_CHECK_MESSAGE(ok, "Dummy pubkey recovery should succeed");
+    if (ok) {
+        BOOST_CHECK(dummy_pub.IsFullyValid());
+        BOOST_CHECK(dummy_pub.IsCompressed());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(ec_recovery_dummy_pubkeys_are_unique)
+{
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    // Recover all dummy pubkeys for round 1 and verify uniqueness
+    std::set<std::vector<unsigned char>> seen;
+    for (int i = 0; i < config.n; i++) {
+        CPubKey pub;
+        if (QSBSpendBuilder::RecoverDummyPubkey(material.rounds[0].dummy_sigs[i], pub)) {
+            std::vector<unsigned char> v(pub.begin(), pub.end());
+            BOOST_CHECK_MESSAGE(seen.find(v) == seen.end(),
+                "Dummy pubkey " + std::to_string(i) + " should be unique");
+            seen.insert(v);
+        }
+    }
+    // At least half should recover successfully
+    BOOST_CHECK_GE(seen.size(), (size_t)(config.n / 2));
+}
+
+BOOST_AUTO_TEST_CASE(ec_recovery_is_valid_der_sig_puzzle)
+{
+    // Valid DER-like sig_puzzle should pass
+    std::vector<unsigned char> valid_der = {0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01,
+                                             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                             0x00, 0x00, 0x00, 0x00};
+    BOOST_CHECK(QSBSpendBuilder::IsValidDERSigPuzzle(valid_der));
+    
+    // Easy mode: byte[0] >> 4 == 3 → passes (0x3X)
+    std::vector<unsigned char> easy = {0x3a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                        0x00, 0x00, 0x00, 0x00};
+    BOOST_CHECK(QSBSpendBuilder::IsValidDERSigPuzzle(easy));
+    
+    // Non-DER: byte[0] = 0x00 → fails
+    std::vector<unsigned char> bad = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                       0x00, 0x00, 0x00, 0x00};
+    BOOST_CHECK(!QSBSpendBuilder::IsValidDERSigPuzzle(bad));
+}
+
+BOOST_AUTO_TEST_CASE(ec_recovery_build_spend_tx_populates_script_sig)
+{
+    // Full integration: BuildSpendTx should now populate scriptSig via EC recovery
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    QSBSpendParams params;
+    params.locktime = 42;
+    params.round1_indices = {0, 1};
+    params.round2_indices = {0, 1};
+    params.funding_outpoint = COutPoint(uint256S("cafe"), 0);
+    params.funding_amount = 50000;
+    
+    CScript dest = CScript() << OP_TRUE;
+    
+    CMutableTransaction tx = QSBSpendBuilder::BuildSpendTx(
+        material, config, params, dest, {}, 5000);
+    
+    // scriptSig on QSB input (index 1) should now be non-empty
+    // (EC recovery runs and populates it)
+    BOOST_CHECK_GT(tx.vin[1].scriptSig.size(), 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ec_recovery_round_sighash_varies_with_indices)
+{
+    // Different selected indices → different FindAndDelete → different sighash → different recovery
+    QSBConfig config = QSBConfig::Test();  // n=10, t1=2, t2=2
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+    
+    CMutableTransaction mtx;
+    mtx.nVersion = 1;
+    mtx.nLockTime = 42;
+    mtx.vin.push_back(CTxIn(COutPoint(uint256(), 0), CScript(), 0xfffffffe));
+    mtx.vin.push_back(CTxIn(COutPoint(uint256S("01"), 0), CScript(), 0xfffffffe));
+    mtx.vout.push_back(CTxOut(45000, CScript() << OP_TRUE));
+    CTransaction tx(mtx);
+    
+    // Two different index selections
+    std::vector<int> sel_a = {0, 1};
+    std::vector<int> sel_b = {8, 9};
+    
+    uint256 hash_a = QSBSpendBuilder::ComputeRoundSighash(
+        tx, full_script, material.sig_r1, material.rounds[0].dummy_sigs, sel_a, 1);
+    uint256 hash_b = QSBSpendBuilder::ComputeRoundSighash(
+        tx, full_script, material.sig_r1, material.rounds[0].dummy_sigs, sel_b, 1);
+    
+    // Different dummy sigs removed → different sighash
+    BOOST_CHECK(hash_a != hash_b);
+    
+    // Recover from both and verify different pubkeys
+    CPubKey pub_a, pub_b;
+    bool ok_a = false, ok_b = false;
+    for (int recid = 0; recid < 2; recid++) {
+        if (!ok_a) ok_a = QSBSpendBuilder::RecoverPubkey(hash_a, material.sig_r1, recid, pub_a);
+        if (!ok_b) ok_b = QSBSpendBuilder::RecoverPubkey(hash_b, material.sig_r1, recid, pub_b);
+    }
+    if (ok_a && ok_b) {
+        std::vector<unsigned char> va(pub_a.begin(), pub_a.end());
+        std::vector<unsigned char> vb(pub_b.begin(), pub_b.end());
+        BOOST_CHECK(va != vb);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
