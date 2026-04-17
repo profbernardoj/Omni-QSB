@@ -1237,4 +1237,126 @@ BOOST_AUTO_TEST_CASE(ec_recovery_round_sighash_varies_with_indices)
     }
 }
 
+// ===========================================================================
+// Wallet Integration Tests (Segment 7 — CreateQSBSpendTx + RPC)
+// ===========================================================================
+
+BOOST_AUTO_TEST_CASE(wallet_store_and_spend_material)
+{
+    // Test QSBWallet::StoreMaterial + CreateQSBSpendTx roundtrip
+    QSBWallet qsb;
+    qsb.Initialize();
+
+    QSBConfig config = QSBConfig::Test();  // n=10, t1=2, t2=2
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+
+    COutPoint outpoint(uint256S("deadbeef"), 0);
+    CAmount amount = 100000;
+
+    // Store material
+    qsb.StoreMaterial(outpoint, material, config, full_script, amount);
+
+    // Build spend tx
+    std::vector<int> r1 = {0, 1};
+    std::vector<int> r2 = {0, 1};
+    CScript dest = CScript() << OP_TRUE;
+    CMutableTransaction tx;
+    std::string error;
+
+    bool ok = qsb.CreateQSBSpendTx(
+        outpoint, dest, {}, 42, r1, r2, tx, error);
+    BOOST_CHECK_MESSAGE(ok, "CreateQSBSpendTx failed: " + error);
+
+    // Verify tx structure
+    BOOST_CHECK_EQUAL(tx.vin.size(), 2u);   // helper + QSB input
+    BOOST_CHECK_EQUAL(tx.nVersion, 1);
+    BOOST_CHECK_EQUAL(tx.nLockTime, 42u);
+    BOOST_CHECK_GT(tx.vout.size(), 0u);     // at least destination
+    BOOST_CHECK_GT(tx.vin[1].scriptSig.size(), 0u);  // EC recovery populated
+
+    qsb.Shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(wallet_spend_with_omni_payload)
+{
+    QSBWallet qsb;
+    qsb.Initialize();
+
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+
+    COutPoint outpoint(uint256S("cafebabe"), 1);
+    qsb.StoreMaterial(outpoint, material, config, full_script, 50000);
+
+    // Omni payload: "omni" in hex
+    std::vector<unsigned char> payload = {0x6f, 0x6d, 0x6e, 0x69};
+    CScript dest = CScript() << OP_TRUE;
+    CMutableTransaction tx;
+    std::string error;
+
+    bool ok = qsb.CreateQSBSpendTx(
+        outpoint, dest, payload, 100, {0, 1}, {0, 1}, tx, error);
+    BOOST_CHECK_MESSAGE(ok, "CreateQSBSpendTx failed: " + error);
+
+    // Output 0 should be OP_RETURN with Omni payload
+    BOOST_CHECK_GE(tx.vout.size(), 2u);
+    BOOST_CHECK_EQUAL(tx.vout[0].nValue, 0);
+    CScript expected_opreturn = CScript() << OP_RETURN << payload;
+    BOOST_CHECK(tx.vout[0].scriptPubKey == expected_opreturn);
+
+    qsb.Shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(wallet_spend_missing_material_fails)
+{
+    QSBWallet qsb;
+    qsb.Initialize();
+
+    COutPoint outpoint(uint256S("badf00d"), 0);
+    CScript dest = CScript() << OP_TRUE;
+    CMutableTransaction tx;
+    std::string error;
+
+    // No material stored for this outpoint → should fail
+    bool ok = qsb.CreateQSBSpendTx(
+        outpoint, dest, {}, 42, {0, 1}, {0, 1}, tx, error);
+    BOOST_CHECK(!ok);
+    BOOST_CHECK(!error.empty());
+
+    qsb.Shutdown();
+}
+
+BOOST_AUTO_TEST_CASE(wallet_spend_wrong_index_count_fails)
+{
+    QSBWallet qsb;
+    qsb.Initialize();
+
+    QSBConfig config = QSBConfig::Test();  // T1Total()=2, T2Total()=2
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+
+    COutPoint outpoint(uint256S("feed"), 0);
+    qsb.StoreMaterial(outpoint, material, config, full_script, 50000);
+
+    CScript dest = CScript() << OP_TRUE;
+    CMutableTransaction tx;
+    std::string error;
+
+    // Wrong number of round 1 indices (3 instead of 2)
+    bool ok = qsb.CreateQSBSpendTx(
+        outpoint, dest, {}, 42, {0, 1, 2}, {0, 1}, tx, error);
+    BOOST_CHECK(!ok);
+    BOOST_CHECK(error.find("Round 1") != std::string::npos);
+
+    // Wrong number of round 2 indices
+    ok = qsb.CreateQSBSpendTx(
+        outpoint, dest, {}, 42, {0, 1}, {0}, tx, error);
+    BOOST_CHECK(!ok);
+    BOOST_CHECK(error.find("Round 2") != std::string::npos);
+
+    qsb.Shutdown();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -8,12 +8,18 @@
 #include <omnicore/qsb/qsb_pregen_pool.h>
 #include <omnicore/qsb/qsb_morpheus_client.h>
 #include <omnicore/qsb/qsb_lumerin_transport.h>
+#include <omnicore/qsb/qsb_script_assembler.h>
+#include <omnicore/qsb/qsb_spend_builder.h>
 
+#include <amount.h>
+#include <primitives/transaction.h>
 #include <script/script.h>
 #include <uint256.h>
 
+#include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 /**
  * QSB Wallet Integration — Gateway to Morpheus Compute
@@ -175,6 +181,7 @@ public:
     /**
      * Create a ready-to-use QSB address.
      * Acquires key material from pool, assembles output script, and derives the QSB ID.
+     * Also stores the material internally for later spending.
      *
      * @param[out] qsbId      The QSB identifier (Hash160 of serialized commitments)
      * @param[out] script     The bare scriptPubKey
@@ -183,10 +190,66 @@ public:
      */
     bool CreateQSBAddress(uint160& qsbId, CScript& script, int timeout_ms = 0);
 
+    // =================================================================
+    // Spend Side (Segment 7)
+    // =================================================================
+
+    /**
+     * Store QSB material for a funded outpoint.
+     * Called after the QSB address receives funds so we can spend later.
+     *
+     * @param[in] outpoint  The outpoint funding the QSB script
+     * @param[in] material  Full QSB script material (both rounds)
+     * @param[in] config    The config used to generate the script
+     * @param[in] script    The assembled redeem script
+     * @param[in] amount    The funded amount
+     */
+    void StoreMaterial(const COutPoint& outpoint,
+                       const QSBScriptMaterial& material,
+                       const QSBConfig& config,
+                       const CScript& script,
+                       CAmount amount);
+
+    /**
+     * Create a spending transaction for a QSB UTXO.
+     *
+     * @param[in]  qsbOutpoint  The funded QSB outpoint
+     * @param[in]  destScript   Destination scriptPubKey
+     * @param[in]  omniPayload  Optional Omni OP_RETURN payload
+     * @param[in]  locktime     nLockTime from GPU pinning search
+     * @param[in]  r1_indices   Round 1 selected HORS indices
+     * @param[in]  r2_indices   Round 2 selected HORS indices
+     * @param[out] outTx        The constructed spending transaction
+     * @param[out] outError     Error message on failure
+     * @return true on success
+     */
+    bool CreateQSBSpendTx(const COutPoint& qsbOutpoint,
+                           const CScript& destScript,
+                           const std::vector<unsigned char>& omniPayload,
+                           uint32_t locktime,
+                           const std::vector<int>& r1_indices,
+                           const std::vector<int>& r2_indices,
+                           CMutableTransaction& outTx,
+                           std::string& outError);
+
+    /**
+     * Stored material for a funded QSB outpoint.
+     */
+    struct StoredMaterial {
+        QSBScriptMaterial material;
+        QSBConfig config;
+        CScript script;
+        CAmount amount;
+    };
+
 private:
     std::unique_ptr<QSBPreGenPool> m_pool;
     std::unique_ptr<QSBMorpheusClient> m_client;
     std::unique_ptr<QSBLumerinTransport> m_transport;
+
+    //! Material store: outpoint → stored material for spending
+    //! Key: txid:vout as string for simplicity
+    std::map<std::string, StoredMaterial> m_material_store;
 
     bool m_initialized = false;
 };

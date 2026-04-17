@@ -4,6 +4,7 @@
 
 #include <omnicore/qsb/qsb_wallet.h>
 #include <omnicore/qsb/qsb_script_assembler.h>
+#include <omnicore/qsb/qsb_spend_builder.h>
 
 #include <omnicore/qsb/qsb_job_builder.h>
 #include <omnicore/qsb/qsb_local_verifier.h>
@@ -302,5 +303,81 @@ bool QSBWallet::CreateQSBAddress(uint160& qsbId, CScript& script, int timeout_ms
     }
 
     qsbId = Hash160(serialized);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Spend Side (Segment 7)
+// ---------------------------------------------------------------------------
+
+static std::string OutpointKey(const COutPoint& op)
+{
+    return op.hash.ToString() + ":" + std::to_string(op.n);
+}
+
+void QSBWallet::StoreMaterial(const COutPoint& outpoint,
+                               const QSBScriptMaterial& material,
+                               const QSBConfig& config,
+                               const CScript& script,
+                               CAmount amount)
+{
+    StoredMaterial sm;
+    sm.material = material;
+    sm.config = config;
+    sm.script = script;
+    sm.amount = amount;
+    m_material_store[OutpointKey(outpoint)] = std::move(sm);
+}
+
+bool QSBWallet::CreateQSBSpendTx(const COutPoint& qsbOutpoint,
+                                   const CScript& destScript,
+                                   const std::vector<unsigned char>& omniPayload,
+                                   uint32_t locktime,
+                                   const std::vector<int>& r1_indices,
+                                   const std::vector<int>& r2_indices,
+                                   CMutableTransaction& outTx,
+                                   std::string& outError)
+{
+    if (!m_initialized) {
+        outError = "QSB wallet not initialized";
+        return false;
+    }
+
+    // Look up stored material
+    std::string key = OutpointKey(qsbOutpoint);
+    auto it = m_material_store.find(key);
+    if (it == m_material_store.end()) {
+        outError = "No QSB material found for outpoint " + key;
+        return false;
+    }
+
+    const StoredMaterial& sm = it->second;
+
+    // Validate index counts match config
+    if ((int)r1_indices.size() != sm.config.T1Total()) {
+        outError = "Round 1 index count mismatch: expected " +
+                   std::to_string(sm.config.T1Total()) + ", got " +
+                   std::to_string(r1_indices.size());
+        return false;
+    }
+    if ((int)r2_indices.size() != sm.config.T2Total()) {
+        outError = "Round 2 index count mismatch: expected " +
+                   std::to_string(sm.config.T2Total()) + ", got " +
+                   std::to_string(r2_indices.size());
+        return false;
+    }
+
+    // Build spend params
+    QSBSpendParams params;
+    params.locktime = locktime;
+    params.round1_indices = r1_indices;
+    params.round2_indices = r2_indices;
+    params.funding_outpoint = qsbOutpoint;
+    params.funding_amount = sm.amount;
+
+    // Build the spending transaction
+    outTx = QSBSpendBuilder::BuildSpendTx(
+        sm.material, sm.config, params, destScript, omniPayload);
+
     return true;
 }

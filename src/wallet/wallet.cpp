@@ -4506,3 +4506,31 @@ bool CWallet::CreateQSBAddress(uint160& outQsbId, CScript& outScriptPubKey, int 
 
     return static_cast<QSBWallet*>(m_qsbWallet)->CreateQSBAddress(outQsbId, outScriptPubKey, timeout_ms);
 }
+
+void CWallet::StoreQSBMaterial(const COutPoint& outpoint,
+                                const QSBScriptMaterial& material,
+                                const QSBConfig& config,
+                                const CScript& script,
+                                CAmount amount)
+{
+    if (!m_qsbWallet) return;
+    static_cast<QSBWallet*>(m_qsbWallet)->StoreMaterial(outpoint, material, config, script, amount);
+}
+
+bool CWallet::CreateQSBSpendTx(const COutPoint& qsbOutpoint,
+                                const CScript& destScript,
+                                const std::vector<unsigned char>& omniPayload,
+                                uint32_t locktime,
+                                const std::vector<int>& r1_indices,
+                                const std::vector<int>& r2_indices,
+                                CMutableTransaction& outTx,
+                                std::string& outError)
+{
+    if (!m_qsbWallet) {
+        outError = "QSB not enabled on this wallet";
+        return false;
+    }
+    return static_cast<QSBWallet*>(m_qsbWallet)->CreateQSBSpendTx(
+        qsbOutpoint, destScript, omniPayload, locktime,
+        r1_indices, r2_indices, outTx, outError);
+}

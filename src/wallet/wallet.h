@@ -98,6 +98,8 @@ class COutput;
 class CScript;
 class CWalletTx;
 struct FeeCalculation;
+struct QSBScriptMaterial;
+struct QSBConfig;
 enum class FeeEstimateMode;
 class ReserveDestination;
 
@@ -1250,6 +1252,37 @@ public:
      * @return true if address created, false if pool empty or QSB disabled
      */
     bool CreateQSBAddress(uint160& outQsbId, CScript& outScriptPubKey, int timeout_ms = 0);
+
+    /**
+     * Store QSB material for a funded outpoint.
+     */
+    void StoreQSBMaterial(const COutPoint& outpoint,
+                          const QSBScriptMaterial& material,
+                          const QSBConfig& config,
+                          const CScript& script,
+                          CAmount amount);
+
+    /**
+     * Create a spending transaction for a QSB UTXO.
+     *
+     * @param[in]  qsbOutpoint  The funded QSB outpoint
+     * @param[in]  destScript   Destination scriptPubKey
+     * @param[in]  omniPayload  Optional Omni OP_RETURN payload
+     * @param[in]  locktime     nLockTime from GPU pinning search
+     * @param[in]  r1_indices   Round 1 selected HORS indices
+     * @param[in]  r2_indices   Round 2 selected HORS indices
+     * @param[out] outTx        The constructed spending transaction
+     * @param[out] outError     Error message on failure
+     * @return true on success
+     */
+    bool CreateQSBSpendTx(const COutPoint& qsbOutpoint,
+                           const CScript& destScript,
+                           const std::vector<unsigned char>& omniPayload,
+                           uint32_t locktime,
+                           const std::vector<int>& r1_indices,
+                           const std::vector<int>& r2_indices,
+                           CMutableTransaction& outTx,
+                           std::string& outError);
 
 };
 

@@ -5,9 +5,11 @@
  */
 
 #include <omnicore/qsb/qsb_wallet.h>
+#include <omnicore/qsb/qsb_spend_builder.h>
 #include <omnicore/qsb/qsb_pregen_pool.h>
 
 #include <chainparams.h>
+#include <core_io.h>
 #include <key_io.h>
 #include <rpc/server.h>
 #include <rpc/util.h>
@@ -154,12 +156,115 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
     return result;
 }
 
+/**
+ * Creates a QSB spending transaction.
+ *
+ * Constructs a spending transaction for a QSB-locked UTXO, using:
+ *   - EC recovery (secp256k1 ECDSA key recovery from sighash + known sigs)
+ *   - FindAndDelete for correct sighash computation
+ *   - Witness stack construction matching Avihu’s Python reference
+ *   - Optional Omni OP_RETURN payload
+ */
+static UniValue createqsbspend(const JSONRPCRequest& request)
+{
+    std::shared_ptr<CWallet> const wallet = GetWalletForJSONRPCRequest(request);
+    CWallet* const pwallet = wallet.get();
+
+    RPCHelpMan{"createqsbspend",
+        "\nCreates a spending transaction for a QSB-locked UTXO.\n"
+        "\nRequires that the QSB material has been stored for this outpoint\n"
+        "(automatically stored when createqsbaddress is used).\n",
+        {
+            {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The txid of the QSB UTXO"},
+            {"vout", RPCArg::Type::NUM, RPCArg::Optional::NO, "The vout index of the QSB UTXO"},
+            {"destination", RPCArg::Type::STR, RPCArg::Optional::NO, "The destination address"},
+            {"locktime", RPCArg::Type::NUM, RPCArg::Optional::NO, "nLockTime from GPU pinning search"},
+            {"round1_indices", RPCArg::Type::ARR, RPCArg::Optional::NO, "Selected HORS indices for round 1",
+                {{"index", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "A HORS index"}}},
+            {"round2_indices", RPCArg::Type::ARR, RPCArg::Optional::NO, "Selected HORS indices for round 2",
+                {{"index", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "A HORS index"}}},
+            {"omni_payload", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED_NAMED_ARG, "Optional Omni OP_RETURN payload (hex)"},
+        },
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
+                {RPCResult::Type::STR_HEX, "rawtx", "The raw transaction hex"},
+                {RPCResult::Type::NUM, "size", "Transaction size in bytes"},
+                {RPCResult::Type::STR, "status", "success"},
+            }
+        },
+        RPCExamples{
+            HelpExampleCli("createqsbspend",
+                "\"abc123...\" 0 \"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa\" 700000 "
+                "\"[0,1,2,3,4,5,6,7,8]\" \"[0,1,2,3,4,5,6,7]\"")
+        }
+    }.Check(request);
+
+    if (!pwallet) {
+        throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Wallet not found");
+    }
+
+    EnsureWalletIsUnlocked(pwallet);
+
+    // Parse outpoint
+    uint256 txid = ParseHashV(request.params[0], "txid");
+    int vout = request.params[1].get_int();
+    COutPoint outpoint(txid, vout);
+
+    // Parse destination address to script
+    CTxDestination dest = DecodeDestination(request.params[2].get_str());
+    if (!IsValidDestination(dest)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid destination address");
+    }
+    CScript destScript = GetScriptForDestination(dest);
+
+    // Parse locktime
+    uint32_t locktime = static_cast<uint32_t>(request.params[3].get_int64());
+
+    // Parse round indices
+    std::vector<int> r1_indices, r2_indices;
+    const UniValue& r1_arr = request.params[4].get_array();
+    for (unsigned int i = 0; i < r1_arr.size(); i++) {
+        r1_indices.push_back(r1_arr[i].get_int());
+    }
+    const UniValue& r2_arr = request.params[5].get_array();
+    for (unsigned int i = 0; i < r2_arr.size(); i++) {
+        r2_indices.push_back(r2_arr[i].get_int());
+    }
+
+    // Parse optional Omni payload
+    std::vector<unsigned char> omniPayload;
+    if (!request.params[6].isNull()) {
+        omniPayload = ParseHexV(request.params[6], "omni_payload");
+    }
+
+    // Build the spend transaction
+    CMutableTransaction tx;
+    std::string error;
+
+    if (!pwallet->CreateQSBSpendTx(outpoint, destScript, omniPayload,
+                                    locktime, r1_indices, r2_indices, tx, error)) {
+        throw JSONRPCError(RPC_MISC_ERROR, error);
+    }
+
+    CTransaction finalTx(tx);
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", finalTx.GetHash().ToString());
+    result.pushKV("rawtx", EncodeHexTx(finalTx));
+    result.pushKV("size", (int)::GetSerializeSize(finalTx, PROTOCOL_VERSION));
+    result.pushKV("status", "success");
+    return result;
+}
+
 // Register QSB RPC commands
 static const CRPCCommand commands[] =
 { //  category              name                actor               argNames
   //  -------------------  ------------------  ------------------  ----------
     { "qsb",               "qsbpoolstatus",    &qsbpoolstatus,     {} },
     { "qsb",               "createqsbaddress", &createqsbaddress,  {"config"} },
+    { "qsb",               "createqsbspend",   &createqsbspend,    {"txid", "vout", "destination", "locktime", "round1_indices", "round2_indices", "omni_payload"} },
 };
 
 void RegisterQSBRPCCommands(CRPCTable &tableRPC)
