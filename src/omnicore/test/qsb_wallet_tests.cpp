@@ -5,6 +5,7 @@
 #include <omnicore/qsb/qsb_wallet.h>
 #include <omnicore/qsb/qsb_pregen_pool.h>
 #include <omnicore/qsb/qsb_local_verifier.h>
+#include <omnicore/qsb/qsb_script_assembler.h>
 #include <script/standard.h>
 
 #include <chainparams.h>
@@ -292,6 +293,167 @@ BOOST_AUTO_TEST_CASE(destructor_calls_shutdown)
 
     // If we get here without hanging, the destructor worked
     BOOST_CHECK(true);
+}
+
+// ===========================================================================
+// QSB Script Assembler Tests
+// ===========================================================================
+
+BOOST_AUTO_TEST_CASE(assembler_config_a_produces_valid_script)
+{
+    // Config A: n=150, t1_signed=8, t1_bonus=1, t2_signed=8, t2_bonus=0
+    QSBConfig config = QSBConfig::ConfigA();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true /* seed_rng */);
+    
+    BOOST_CHECK(material.IsValid());
+    BOOST_CHECK_EQUAL((int)material.rounds.size(), 2);
+    BOOST_CHECK_EQUAL(material.rounds[0].num_keys, 150);
+    BOOST_CHECK_EQUAL(material.rounds[1].num_keys, 150);
+    BOOST_CHECK_EQUAL((int)material.pin_sig.size(), 9);
+    BOOST_CHECK_EQUAL((int)material.sig_r1.size(), 9);
+    BOOST_CHECK_EQUAL((int)material.sig_r2.size(), 9);
+    
+    // Assemble
+    CScript script = QSBScriptAssembler::Assemble(material, config);
+    
+    // Config A script should be approximately 9,000-10,000 bytes
+    // n=150: 150 commitments × 21 bytes + 150 dummy sigs × 10 bytes = ~4,650
+    // Two rounds: ~9,300 + pinning + selections + puzzle + CMS ≈ ~9,650
+    BOOST_CHECK_GT(script.size(), 8000u);
+    BOOST_CHECK_LT(script.size(), 12000u);
+}
+
+BOOST_AUTO_TEST_CASE(assembler_deterministic_with_seed)
+{
+    QSBConfig config = QSBConfig::Test();
+    
+    QSBScriptMaterial mat1 = QSBScriptAssembler::GenerateMaterial(config, true);
+    QSBScriptMaterial mat2 = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    CScript script1 = QSBScriptAssembler::Assemble(mat1, config);
+    CScript script2 = QSBScriptAssembler::Assemble(mat2, config);
+    
+    // Same seed → same material → same script
+    BOOST_CHECK(script1 == script2);
+}
+
+BOOST_AUTO_TEST_CASE(assembler_test_config_produces_small_script)
+{
+    // Test config: n=10, t1=2, t2=2
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    BOOST_CHECK(material.IsValid());
+    BOOST_CHECK_EQUAL(material.rounds[0].num_keys, 10);
+    BOOST_CHECK_EQUAL(material.rounds[1].num_keys, 10);
+    
+    CScript script = QSBScriptAssembler::Assemble(material, config);
+    
+    // Test config script should be much smaller than Config A
+    // n=10: ~10 × 21 + 10 × 10 = ~310 per round × 2 ≈ ~620 + overhead
+    BOOST_CHECK_GT(script.size(), 400u);
+    BOOST_CHECK_LT(script.size(), 2000u);
+}
+
+BOOST_AUTO_TEST_CASE(assembler_commitments_are_hash160)
+{
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    // Verify each commitment is Hash160 of its preimage
+    for (int r = 0; r < 2; ++r) {
+        for (int i = 0; i < config.n; ++i) {
+            uint160 expected = Hash160(material.rounds[r].preimages[i]);
+            std::vector<unsigned char> expected_bytes(expected.begin(), expected.end());
+            BOOST_CHECK_EQUAL_COLLECTIONS(
+                material.rounds[r].commitments[i].begin(),
+                material.rounds[r].commitments[i].end(),
+                expected_bytes.begin(),
+                expected_bytes.end());
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(assembler_dummy_sigs_are_valid_der)
+{
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    // Verify each dummy sig is 9 bytes with proper DER structure
+    for (int r = 0; r < 2; ++r) {
+        for (int i = 0; i < config.n; ++i) {
+            const auto& sig = material.rounds[r].dummy_sigs[i];
+            BOOST_CHECK_EQUAL(sig.size(), 9u);
+            BOOST_CHECK_EQUAL(sig[0], 0x30);  // DER sequence
+            BOOST_CHECK_EQUAL(sig[1], 0x06);  // 6 bytes payload
+            BOOST_CHECK_EQUAL(sig[2], 0x02);  // integer tag (r)
+            BOOST_CHECK_EQUAL(sig[3], 0x01);  // 1 byte r
+            BOOST_CHECK_EQUAL(sig[5], 0x02);  // integer tag (s)
+            BOOST_CHECK_EQUAL(sig[6], 0x01);  // 1 byte s
+            BOOST_CHECK_EQUAL(sig[8], 0x03);  // SIGHASH_SINGLE
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(assembler_dummy_sigs_unique_per_round)
+{
+    QSBConfig config = QSBConfig::ConfigA();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    // All dummy sigs within a round must be unique
+    for (int r = 0; r < 2; ++r) {
+        std::set<std::vector<unsigned char>> seen;
+        for (int i = 0; i < config.n; ++i) {
+            auto result = seen.insert(material.rounds[r].dummy_sigs[i]);
+            BOOST_CHECK_MESSAGE(result.second,
+                "Duplicate dummy sig in round " + std::to_string(r) + " at index " + std::to_string(i));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(assembler_pinning_section_structure)
+{
+    // Verify the first bytes of the assembled script match the pinning pattern
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript script = QSBScriptAssembler::Assemble(material, config);
+    
+    // Pinning section starts with push of 9-byte pin_sig
+    // Format: 09 <9 bytes> OP_OVER(0x78) OP_CHECKSIGVERIFY(0xad) OP_RIPEMD160(0xa6) OP_SWAP(0x7c) OP_CHECKSIGVERIFY(0xad)
+    const unsigned char* data = script.data();
+    BOOST_CHECK_EQUAL(data[0], 0x09);  // push 9 bytes
+    // Bytes 1-9: pin_sig
+    BOOST_CHECK_EQUAL(data[10], 0x78);  // OP_OVER
+    BOOST_CHECK_EQUAL(data[11], 0xad);  // OP_CHECKSIGVERIFY
+    BOOST_CHECK_EQUAL(data[12], 0xa6);  // OP_RIPEMD160
+    BOOST_CHECK_EQUAL(data[13], 0x7c);  // OP_SWAP
+    BOOST_CHECK_EQUAL(data[14], 0xad);  // OP_CHECKSIGVERIFY
+}
+
+BOOST_AUTO_TEST_CASE(assembler_wallet_integration)
+{
+    // Test that AssembleQSBOutput now produces a real script (not stub)
+    QSBWallet qsb;
+    qsb.Initialize();
+    
+    QSBPoolEntry entry;
+    bool acquired = qsb.AcquireReadyOutputBlocking(entry, 5000);
+    BOOST_REQUIRE(acquired);
+    
+    CScript script;
+    bool ok = qsb.AssembleQSBOutput(entry, script);
+    BOOST_CHECK(ok);
+    
+    // Should NOT be stub anymore (OP_RETURN + QSB_STUB)
+    BOOST_CHECK_GT(script.size(), 1000u);
+    
+    // Should not start with OP_RETURN (0x6a)
+    BOOST_CHECK_NE(script[0], 0x6a);
+    
+    // Should start with pinning push (0x09 = push 9 bytes)
+    BOOST_CHECK_EQUAL(script[0], 0x09);
+    
+    qsb.Shutdown();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

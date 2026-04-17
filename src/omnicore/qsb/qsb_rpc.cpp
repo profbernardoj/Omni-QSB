@@ -86,8 +86,9 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
 
     RPCHelpMan{"createqsbaddress",
         "\nCreates a new Quantum-Safe Bitcoin address from the pre-generation pool.\n"
-        "\nThe address is derived from HORS commitments and can be used for quantum-safe transactions.\n"
-        "\nNOTE: This is a STUB implementation. The final assembly awaits Avihu Levy's reference library.\n",
+        "\nThe address is derived from HORS commitments and uses the production\n"
+        "QSB script assembly (Config A: n=150, t_signed=8 with bonus selections).\n"
+        "\nScript size is approximately 9,650 bytes for Config A.\n",
         {
             {"config", RPCArg::Type::STR, RPCArg::Optional::OMITTED_NAMED_ARG, "QSB config name (default: \"Config_A\")", "Config_A"},
         },
@@ -95,10 +96,10 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
             RPCResult::Type::OBJ, "", "",
             {
                 {RPCResult::Type::STR, "address", "The QSB address (Bech32 encoded: qs1... for mainnet, qst1... for testnet, qsrt1... for regtest)"},
-                {RPCResult::Type::STR_HEX, "scriptPubKey", "The raw scriptPubKey (hex)"},
+                {RPCResult::Type::STR_HEX, "scriptPubKey", "The raw scriptPubKey (hex, ~9650 bytes for Config A)"},
                 {RPCResult::Type::STR, "status", "Address creation status (\"ready\" or \"generating\")"},
                 {RPCResult::Type::NUM, "pool_ready", "Number of ready outputs remaining in pool"},
-                {RPCResult::Type::STR, "warning", "Stub implementation notice"},
+                {RPCResult::Type::NUM, "script_size", "Size of assembled script in bytes"},
             }
         },
         RPCExamples{
@@ -148,7 +149,7 @@ static UniValue createqsbaddress(const JSONRPCRequest& request)
     result.pushKV("scriptPubKey", HexStr(scriptPubKey));
     result.pushKV("status", "ready");
     result.pushKV("pool_ready", ready_count - 1);  // One was just consumed
-    result.pushKV("warning", "STUB: Final assembly awaits Avihu Levy's reference library. This address uses a placeholder script.");
+    result.pushKV("script_size", static_cast<int>(scriptPubKey.size()));
 
     return result;
 }

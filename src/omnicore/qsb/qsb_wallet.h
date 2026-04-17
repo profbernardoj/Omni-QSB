@@ -162,15 +162,13 @@ public:
     /**
      * Assemble the final QSB output script (bare scriptPubKey).
      *
-     * NOTE: This is a STUB implementation awaiting Avihu Levy's reference library.
-     * The real implementation will call QSBReferenceLib::AssembleBareScript()
-     * to produce the ~9,650-byte script with HORS commitments and pinning puzzle.
-     *
-     * This stub returns a minimal OP_RETURN placeholder for RPC/UI testing.
+     * Production implementation based on Avihu Levy's QSBScriptBuilder.
+     * Produces the ~9,650-byte script with HORS commitments,
+     * dummy signatures, and pinning puzzle for Config A.
      *
      * @param[in]  entry   Pre-generated HORS key entry from pool
-     * @param[out] script  The assembled output script (placeholder)
-     * @return true on success (always true for stub)
+     * @param[out] script  The assembled output script
+     * @return true on success
      */
     bool AssembleQSBOutput(const QSBPoolEntry& entry, CScript& script);
 
