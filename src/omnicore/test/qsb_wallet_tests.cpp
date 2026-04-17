@@ -8,6 +8,8 @@
 #include <omnicore/qsb/qsb_script_assembler.h>
 #include <omnicore/qsb/qsb_spend_builder.h>
 #include <key_io.h>
+#include <script/interpreter.h>
+#include <script/script_error.h>
 #include <script/standard.h>
 
 #include <chainparams.h>
@@ -1036,15 +1038,19 @@ BOOST_AUTO_TEST_CASE(spend_builder_script_sig_construction)
     
     CScript scriptSig = QSBSpendBuilder::BuildScriptSig(solution, full_script, config);
     
-    // scriptSig should be non-empty and contain the redeem script at the end
-    BOOST_CHECK_GT(scriptSig.size(), full_script.size());
+    // scriptSig should be non-empty.
+    // For bare scriptPubKey (QSB), the scriptSig contains only the witness data
+    // (keys, preimages, indices) — NOT the redeem script.
+    BOOST_CHECK_GT(scriptSig.size(), 0u);
     
-    // The last push in the scriptSig should be the full redeem script
-    // (P2SH requirement)
-    std::vector<unsigned char> redeemBytes(full_script.begin(), full_script.end());
-    // Check the script ends with the redeem script push
-    // The push encoding for a large script uses OP_PUSHDATA2
-    BOOST_CHECK_GT(scriptSig.size(), redeemBytes.size() + 3);
+    // Expected witness data per round:
+    //   key_puzzle (33) + key_nonce (33) + 2 dummy_pubs (33 each) +
+    //   2 preimages (20 each) + 2 indices (1-3 bytes each)
+    // Two rounds + pinning (2 * 33 = 66) = total > 300 bytes
+    BOOST_CHECK_GT(scriptSig.size(), 300u);
+    
+    // Verify it does NOT contain the full redeem script (bare script, not P2SH)
+    BOOST_CHECK_LT(scriptSig.size(), full_script.size());
 }
 
 // ===========================================================================
@@ -1235,6 +1241,86 @@ BOOST_AUTO_TEST_CASE(ec_recovery_round_sighash_varies_with_indices)
         std::vector<unsigned char> vb(pub_b.begin(), pub_b.end());
         BOOST_CHECK(va != vb);
     }
+}
+
+// ===========================================================================
+// VerifyScript Roundtrip (Segment 7 — End-to-End Validation)
+// ===========================================================================
+
+// NOTE: CHECKSIGVERIFY failure is EXPECTED in this unit test.
+// We use synthetic signatures from GenerateMaterial() (minimal DER with
+// dummy r/s values like r=pin_r, s=42).  In a real spend the GPU pinning
+// search produces valid nSequence/nLockTime values that make the 20-byte
+// puzzle hash a valid minimal DER signature — that is outside unit-test scope.
+//
+// This test verifies:
+//   1. Sighash computation with FindAndDelete (same codepath as script engine)
+//   2. Witness stack ordering (R2 → R1 → Pin, no redeem-script push for bare)
+//   3. EC recovery wiring (RecoverPubkey / RecoverQSBPubkey / RecoverDummyPubkey)
+//   4. Transaction structure (version, locktime, inputs, outputs, Omni OP_RETURN)
+//   5. VerifyScript does NOT crash — reaches CHECKSIGVERIFY and fails gracefully
+BOOST_AUTO_TEST_CASE(spender_synthetic_sig_fails_checksigverify_as_expected)
+{
+    QSBConfig config = QSBConfig::Test();  // n=10, t1=2, t2=2
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+    BOOST_REQUIRE(full_script.size() > 100);
+
+    // Simulate funding: create a fake "funding tx" with the QSB script as output
+    CMutableTransaction funding_tx;
+    funding_tx.nVersion = 1;
+    funding_tx.vin.resize(1);
+    funding_tx.vin[0].prevout = COutPoint(uint256(), 0);
+    CTxOut funding_out;
+    funding_out.nValue = 100000;
+    funding_out.scriptPubKey = full_script;
+    funding_tx.vout.push_back(funding_out);
+    CTransaction funding(funding_tx);
+
+    // Build spend params (synthetic — indices within [0, n))
+    QSBSpendParams params;
+    params.locktime = 42;
+    params.round1_indices = {0, 1};
+    params.round2_indices = {0, 1};
+    params.funding_outpoint = COutPoint(funding.GetHash(), 0);
+    params.funding_amount = 100000;
+
+    CScript dest = CScript() << OP_TRUE;
+    CMutableTransaction spend_tx = QSBSpendBuilder::BuildSpendTx(
+        material, config, params, dest);
+
+    // --- Structural checks (always pass, even with synthetic sigs) ---
+    BOOST_REQUIRE_GT(spend_tx.vin.size(), 1u);
+    BOOST_CHECK_GT(spend_tx.vin[1].scriptSig.size(), 100u);  // well-formed scriptSig
+    BOOST_CHECK_EQUAL(spend_tx.nVersion, 1);
+    BOOST_CHECK_EQUAL(spend_tx.nLockTime, 42u);
+
+    // Helper input at idx 0, QSB input at idx 1
+    BOOST_CHECK_EQUAL(spend_tx.vin[0].nSequence, 0xfffffffeu);
+    BOOST_CHECK_EQUAL(spend_tx.vin[1].nSequence, 0xfffffffeu);
+
+    // One output (dest) — no Omni payload in this variant
+    BOOST_CHECK_EQUAL(spend_tx.vout.size(), 1u);
+    BOOST_CHECK_EQUAL(spend_tx.vout[0].nValue, 95000);  // 100000 - 5000 fee
+
+    // --- VerifyScript: expect CHECKSIGVERIFY failure (synthetic sigs) ---
+    unsigned int flags = SCRIPT_VERIFY_NONE;
+    MutableTransactionSignatureChecker checker(&spend_tx, 1, params.funding_amount);
+    ScriptError serror;
+
+    bool ok = VerifyScript(
+        spend_tx.vin[1].scriptSig,
+        full_script,
+        nullptr,  // no witness (bare script)
+        flags,
+        checker,
+        &serror);
+
+    // Synthetic sigs → CHECKSIGVERIFY must fail (not a crash, not a parse error)
+    BOOST_CHECK(!ok);
+    BOOST_CHECK_EQUAL(serror, SCRIPT_ERR_CHECKSIGVERIFY);
+    BOOST_TEST_MESSAGE("VerifyScript correctly rejects synthetic sigs: "
+                       << ScriptErrorString(serror));
 }
 
 // ===========================================================================

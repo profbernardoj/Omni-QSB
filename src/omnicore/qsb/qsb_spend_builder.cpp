@@ -226,9 +226,13 @@ CScript QSBSpendBuilder::BuildScriptSig(
     //   Round 2: key_puzzle, key_nonce, dummy_pubs(rev), preimages(rev), indices(rev)
     //   Round 1: key_puzzle, key_nonce, dummy_pubs(rev), preimages(rev), indices(rev)
     //   Pinning: key_puzzle, key_nonce
-    //   Redeem script (full QSB script for P2SH)
+    //   (For P2SH: redeem script would be pushed here)
     //
     // Reference: qsb_pipeline.py cmd_assemble() Step 4
+    //
+    // NOTE: For bare scriptPubKey (QSB), the scriptPubKey IS the QSB script.
+    // The scriptSig only contains the witness data — the redeem script push
+    // is only needed for P2SH wrapping.
 
     CScript scriptSig;
 
@@ -260,12 +264,10 @@ CScript QSBSpendBuilder::BuildScriptSig(
     pushRound(solution.round1);
 
     // Pinning data (top of stack)
+    // Stack order after scriptSig execution: R2_data ← R1_data ← pin_data
+    // QSB script expects: pin_key_nonce pin_key_puzzle on stack (key_nonce on top)
     scriptSig << solution.pin_key_puzzle;
     scriptSig << solution.pin_key_nonce;
-
-    // P2SH: push the redeem script at the end
-    std::vector<unsigned char> redeemBytes(redeem_script.begin(), redeem_script.end());
-    scriptSig << redeemBytes;
 
     return scriptSig;
 }
