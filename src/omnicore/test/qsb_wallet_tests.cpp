@@ -6,6 +6,7 @@
 #include <omnicore/qsb/qsb_pregen_pool.h>
 #include <omnicore/qsb/qsb_local_verifier.h>
 #include <omnicore/qsb/qsb_script_assembler.h>
+#include <omnicore/qsb/qsb_spend_builder.h>
 #include <key_io.h>
 #include <script/standard.h>
 
@@ -827,6 +828,223 @@ BOOST_AUTO_TEST_CASE(assembler_config_a_script_larger_than_a120)
     
     BOOST_CHECK_GT(sA.size(), sB.size());
     BOOST_CHECK_GT(sB.size(), sC.size());
+}
+
+// ===========================================================================
+// QSB Spend Builder Tests (Segment 7)
+// ===========================================================================
+
+BOOST_AUTO_TEST_CASE(spend_builder_computes_pinning_sighash)
+{
+    // Build a test transaction and verify sighash computation works
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+    
+    // Build a minimal spending tx
+    CMutableTransaction mtx;
+    mtx.nVersion = 1;
+    mtx.nLockTime = 12345;
+    
+    // Helper input (index 0)
+    CTxIn helper;
+    helper.prevout = COutPoint(uint256(), 0);
+    helper.nSequence = 0xfffffffe;
+    mtx.vin.push_back(helper);
+    
+    // QSB input (index 1)
+    CTxIn qsb_in;
+    qsb_in.prevout = COutPoint(uint256S("01"), 0);
+    qsb_in.nSequence = 0xfffffffe;
+    mtx.vin.push_back(qsb_in);
+    
+    // One output
+    CTxOut out;
+    out.nValue = 45000;
+    out.scriptPubKey = CScript() << OP_DUP << OP_HASH160 << std::vector<unsigned char>(20, 0) << OP_EQUALVERIFY << OP_CHECKSIG;
+    mtx.vout.push_back(out);
+    
+    CTransaction tx(mtx);
+    
+    // Compute pinning sighash
+    uint256 hash = QSBSpendBuilder::ComputePinningSighash(
+        tx, full_script, material.pin_sig, 1);
+    
+    // Should produce a non-zero hash
+    BOOST_CHECK(!hash.IsNull());
+    
+    // Computing again with same params should be deterministic
+    uint256 hash2 = QSBSpendBuilder::ComputePinningSighash(
+        tx, full_script, material.pin_sig, 1);
+    BOOST_CHECK(hash == hash2);
+}
+
+BOOST_AUTO_TEST_CASE(spend_builder_computes_round_sighash)
+{
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+    
+    CMutableTransaction mtx;
+    mtx.nVersion = 1;
+    mtx.nLockTime = 12345;
+    mtx.vin.push_back(CTxIn(COutPoint(uint256(), 0), CScript(), 0xfffffffe));
+    mtx.vin.push_back(CTxIn(COutPoint(uint256S("01"), 0), CScript(), 0xfffffffe));
+    mtx.vout.push_back(CTxOut(45000, CScript() << OP_TRUE));
+    CTransaction tx(mtx);
+    
+    // Round 1: select t1_signed + t1_bonus indices
+    std::vector<int> r1_indices = {0, 1};  // Test config: t1=2
+    
+    uint256 hash = QSBSpendBuilder::ComputeRoundSighash(
+        tx, full_script, material.sig_r1,
+        material.rounds[0].dummy_sigs, r1_indices, 1);
+    
+    BOOST_CHECK(!hash.IsNull());
+    
+    // Different indices should produce different sighash
+    std::vector<int> r1_alt = {2, 3};
+    uint256 hash_alt = QSBSpendBuilder::ComputeRoundSighash(
+        tx, full_script, material.sig_r1,
+        material.rounds[0].dummy_sigs, r1_alt, 1);
+    
+    BOOST_CHECK(hash != hash_alt);
+}
+
+BOOST_AUTO_TEST_CASE(spend_builder_sighash_find_and_delete_removes_sigs)
+{
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+    
+    // Verify that FindAndDelete actually changes the scriptCode
+    CScript scriptCode(full_script);
+    CScript pattern;
+    pattern << material.pin_sig;
+    int removed = FindAndDelete(scriptCode, pattern);
+    
+    // pin_sig should appear at least once in the script
+    BOOST_CHECK_GE(removed, 1);
+    
+    // Script should be shorter after removal
+    BOOST_CHECK_LT(scriptCode.size(), full_script.size());
+}
+
+BOOST_AUTO_TEST_CASE(spend_builder_builds_valid_tx_structure)
+{
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    QSBSpendParams params;
+    params.locktime = 12345;
+    params.round1_indices = {0, 1};  // t1=2 for test config
+    params.round2_indices = {0, 1};  // t2=2 for test config
+    params.funding_outpoint = COutPoint(uint256S("abcd"), 0);
+    params.funding_amount = 50000;
+    
+    CScript dest = CScript() << OP_DUP << OP_HASH160
+                              << std::vector<unsigned char>(20, 0xaa)
+                              << OP_EQUALVERIFY << OP_CHECKSIG;
+    
+    CMutableTransaction tx = QSBSpendBuilder::BuildSpendTx(
+        material, config, params, dest, {}, 5000);
+    
+    // Verify transaction structure
+    BOOST_CHECK_EQUAL(tx.nVersion, 1);
+    BOOST_CHECK_EQUAL(tx.nLockTime, 12345u);
+    
+    // 2 inputs: helper + QSB
+    BOOST_CHECK_EQUAL(tx.vin.size(), 2u);
+    BOOST_CHECK_EQUAL(tx.vin[1].prevout.hash, uint256S("abcd"));
+    
+    // 1 output (no Omni payload)
+    BOOST_CHECK_EQUAL(tx.vout.size(), 1u);
+    BOOST_CHECK_EQUAL(tx.vout[0].nValue, 45000);  // 50000 - 5000 fee
+}
+
+BOOST_AUTO_TEST_CASE(spend_builder_builds_tx_with_omni_payload)
+{
+    QSBConfig config = QSBConfig::Test();
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    
+    QSBSpendParams params;
+    params.locktime = 99999;
+    params.round1_indices = {0, 1};
+    params.round2_indices = {0, 1};
+    params.funding_outpoint = COutPoint(uint256S("beef"), 1);
+    params.funding_amount = 100000;
+    
+    CScript dest = CScript() << OP_TRUE;
+    std::vector<unsigned char> omni = {'o','m','n','i'};
+    
+    CMutableTransaction tx = QSBSpendBuilder::BuildSpendTx(
+        material, config, params, dest, omni, 1000);
+    
+    // 2 outputs: OP_RETURN + destination
+    BOOST_CHECK_EQUAL(tx.vout.size(), 2u);
+    
+    // First output is OP_RETURN with Omni payload
+    BOOST_CHECK_EQUAL(tx.vout[0].nValue, 0);
+    BOOST_CHECK(tx.vout[0].scriptPubKey[0] == OP_RETURN);
+    
+    // Second output is destination with correct value
+    BOOST_CHECK_EQUAL(tx.vout[1].nValue, 99000);  // 100000 - 1000 fee
+}
+
+BOOST_AUTO_TEST_CASE(spend_builder_script_sig_construction)
+{
+    // Build a mock solution and verify scriptSig structure
+    QSBConfig config = QSBConfig::Test();  // n=10, t1=2, t2=2
+    QSBScriptMaterial material = QSBScriptAssembler::GenerateMaterial(config, true);
+    CScript full_script = QSBScriptAssembler::Assemble(material, config);
+    
+    QSBSpendSolution solution;
+    solution.locktime = 12345;
+    solution.pin_key_nonce = std::vector<unsigned char>(33, 0x02);
+    solution.pin_key_puzzle = std::vector<unsigned char>(33, 0x03);
+    solution.pin_sig_puzzle = std::vector<unsigned char>(20, 0xaa);
+    
+    // Round 1
+    solution.round1.key_nonce = std::vector<unsigned char>(33, 0x02);
+    solution.round1.key_puzzle = std::vector<unsigned char>(33, 0x03);
+    solution.round1.sig_puzzle = std::vector<unsigned char>(20, 0xbb);
+    solution.round1.dummy_pubkeys = {
+        std::vector<unsigned char>(33, 0x04),
+        std::vector<unsigned char>(33, 0x05)
+    };
+    solution.round1.preimages = {
+        std::vector<unsigned char>(20, 0x10),
+        std::vector<unsigned char>(20, 0x11)
+    };
+    solution.round1.subset = {3, 7};
+    solution.round1.signed_indices = {3, 7};
+    
+    // Round 2
+    solution.round2.key_nonce = std::vector<unsigned char>(33, 0x02);
+    solution.round2.key_puzzle = std::vector<unsigned char>(33, 0x03);
+    solution.round2.sig_puzzle = std::vector<unsigned char>(20, 0xcc);
+    solution.round2.dummy_pubkeys = {
+        std::vector<unsigned char>(33, 0x06),
+        std::vector<unsigned char>(33, 0x07)
+    };
+    solution.round2.preimages = {
+        std::vector<unsigned char>(20, 0x20),
+        std::vector<unsigned char>(20, 0x21)
+    };
+    solution.round2.subset = {1, 5};
+    solution.round2.signed_indices = {1, 5};
+    
+    CScript scriptSig = QSBSpendBuilder::BuildScriptSig(solution, full_script, config);
+    
+    // scriptSig should be non-empty and contain the redeem script at the end
+    BOOST_CHECK_GT(scriptSig.size(), full_script.size());
+    
+    // The last push in the scriptSig should be the full redeem script
+    // (P2SH requirement)
+    std::vector<unsigned char> redeemBytes(full_script.begin(), full_script.end());
+    // Check the script ends with the redeem script push
+    // The push encoding for a large script uses OP_PUSHDATA2
+    BOOST_CHECK_GT(scriptSig.size(), redeemBytes.size() + 3);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

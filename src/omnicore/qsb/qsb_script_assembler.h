@@ -158,6 +158,12 @@ public:
         const QSBScriptMaterial& material,
         const QSBConfig& config = QSBConfig::ConfigA());
 
+    //! Push data with proper Bitcoin script encoding
+    static CScript& PushData(CScript& script, const std::vector<unsigned char>& data);
+    
+    //! Push a number using OP_0..OP_16 for small values, CScriptNum for larger
+    static CScript& PushNumber(CScript& script, int n);
+
 private:
     //! Build the pinning section (5 ops)
     static CScript BuildPinningSection(
@@ -173,12 +179,6 @@ private:
         int t_signed,
         int t_bonus,
         int n);
-    
-    //! Push data with proper Bitcoin script encoding
-    static CScript& PushData(CScript& script, const std::vector<unsigned char>& data);
-    
-    //! Push a number using OP_0..OP_16 for small values, CScriptNum for larger
-    static CScript& PushNumber(CScript& script, int n);
 };
 
 #endif // OMNICORE_QSB_SCRIPT_ASSEMBLER_H
